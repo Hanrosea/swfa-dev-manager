@@ -11,17 +11,29 @@ import type {
 } from "@/lib/types";
 
 const STORAGE_KEY = "mybi-infra-dev-manager-v1";
+const PRIORITY_STORAGE_KEY = "mybi-infra-qa-priority-v1";
 const statusOptions: DevelopmentStatus[] = [
-  "요청",
-  "검토중",
-  "일정수립",
-  "개발대기",
-  "개발중",
-  "품질검증",
-  "배포대기",
+  "대기중",
+  "개발진행",
+  "품질진행",
   "완료",
-  "보류",
 ];
+
+function normalizeStatus(value: unknown): DevelopmentStatus {
+  if (value === "완료" || value === "대기중" || value === "개발진행" || value === "품질진행") {
+    return value;
+  }
+
+  if (["진행중", "개발중"].includes(String(value))) {
+    return "개발진행";
+  }
+
+  if (["품질검증", "배포대기"].includes(String(value))) {
+    return "품질진행";
+  }
+
+  return "대기중";
+}
 
 const phaseMeta: Record<PhaseType, { label: string; short: string }> = {
   BUSINESS: { label: "사업", short: "사" },
@@ -30,7 +42,11 @@ const phaseMeta: Record<PhaseType, { label: string; short: string }> = {
   DEPLOY: { label: "배포", short: "배" },
 };
 
-const menuItems = ["일정 대시보드", "전체 개발", "이슈 관리", "보고서"];
+const menuItems = [
+  { id: "dashboard", label: "일정 대시보드", icon: "▦" },
+  { id: "developments", label: "전체 개발", icon: "≡" },
+  { id: "priority", label: "우선 순위", icon: "↕" },
+] as const;
 
 function localDate(date: Date) {
   const year = date.getFullYear();
@@ -65,25 +81,47 @@ function dateRange(item: Development) {
 }
 
 function createCode(items: Development[]) {
+  const year = new Date().getFullYear();
   const max = items.reduce((value, item) => {
     const number = Number(item.code.split("-").at(-1));
     return Number.isNaN(number) ? value : Math.max(value, number);
   }, 0);
-  return `DEV-2026-${String(max + 1).padStart(4, "0")}`;
+  return `DEV-${year}-${String(max + 1).padStart(4, "0")}`;
+}
+
+function phasesForStatus(phases: Phase[], status: DevelopmentStatus) {
+  return phases.map((phase) => {
+    const progress = Math.min(100, Math.max(0, Number(phase.progress) || 0));
+    if (status === "완료") return { ...phase, progress: 100 };
+    if (status === "품질진행" && ["BUSINESS", "DEVELOPMENT"].includes(phase.type)) {
+      return { ...phase, progress: 100 };
+    }
+    if (status === "개발진행" && phase.type === "BUSINESS") {
+      return { ...phase, progress: 100 };
+    }
+    return { ...phase, progress };
+  });
+}
+
+function normalizeDevelopment(item: Development): Development {
+  const status = normalizeStatus(item.status);
+  return {
+    ...item,
+    status,
+    phases: phasesForStatus(item.phases ?? [], status),
+  };
 }
 
 function mapDatabaseRow(row: Record<string, unknown>): Development {
   const phases = (row.development_phases as Record<string, unknown>[] | null) ?? [];
-  const issues = (row.issues as Record<string, unknown>[] | null) ?? [];
-  return {
+  return normalizeDevelopment({
     id: String(row.id),
     code: String(row.development_code),
     name: String(row.name),
     customer: String(row.customer ?? ""),
     region: String(row.region ?? ""),
     category: row.category as Development["category"],
-    priority: row.priority as Development["priority"],
-    status: row.status as DevelopmentStatus,
+    status: normalizeStatus(row.status),
     summary: String(row.summary ?? ""),
     requirements: String(row.requirements ?? ""),
     assignees: (row.assignee_names as string[] | null) ?? [],
@@ -97,20 +135,16 @@ function mapDatabaseRow(row: Record<string, unknown>): Development {
       md: Number(phase.planned_md ?? 0),
       progress: Number(phase.progress ?? 0),
     })),
-    issues: issues.map((issue) => ({
-      id: String(issue.id),
-      title: String(issue.title),
-      status: issue.status as Development["issues"][number]["status"],
-      severity: issue.severity as Development["issues"][number]["severity"],
-      dueDate: issue.due_date ? String(issue.due_date) : undefined,
-    })),
-  };
+  });
 }
 
 export default function DevelopmentManager() {
   const [items, setItems] = useState<Development[]>(initialDevelopments);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [month, setMonth] = useState(() => new Date(2026, 7, 1));
+  const [month, setMonth] = useState(() => {
+    const current = new Date();
+    return new Date(current.getFullYear(), current.getMonth(), 1);
+  });
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("전체 상태");
   const [categoryFilter, setCategoryFilter] = useState("전체 구분");
@@ -119,17 +153,39 @@ export default function DevelopmentManager() {
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"dashboard" | "priority">("dashboard");
+  const [priorityIds, setPriorityIds] = useState<string[]>([]);
+  const [showPriorityPicker, setShowPriorityPicker] = useState(false);
+  const [draggingPriorityId, setDraggingPriorityId] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       const saved = window.localStorage.getItem(STORAGE_KEY);
+      const savedPriorities = window.localStorage.getItem(PRIORITY_STORAGE_KEY);
+      let loadedItems = initialDevelopments;
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as Development[];
-          queueMicrotask(() => setItems(parsed));
+          if (Array.isArray(parsed)) {
+            loadedItems = parsed.map(normalizeDevelopment);
+            queueMicrotask(() => setItems(loadedItems));
+          }
         } catch {
           window.localStorage.removeItem(STORAGE_KEY);
+        }
+      }
+      if (savedPriorities) {
+        try {
+          const parsed = JSON.parse(savedPriorities) as string[];
+          if (Array.isArray(parsed)) {
+            const qualityIds = new Set(
+              loadedItems.filter((item) => item.status === "품질진행").map((item) => item.id),
+            );
+            queueMicrotask(() => setPriorityIds(parsed.filter((id) => qualityIds.has(id))));
+          }
+        } catch {
+          window.localStorage.removeItem(PRIORITY_STORAGE_KEY);
         }
       }
       return;
@@ -141,12 +197,31 @@ export default function DevelopmentManager() {
       if (!mounted) return;
       setUserEmail(sessionData.session?.user.email ?? null);
       if (sessionData.session) {
-        const { data, error } = await supabase
-          .from("developments")
-          .select("*, development_phases(*), issues(*)")
-          .is("deleted_at", null)
-          .order("updated_at", { ascending: false });
-        if (!error) setItems((data ?? []).map(mapDatabaseRow));
+        const [developmentResult, priorityResult] = await Promise.all([
+          supabase
+            .from("developments")
+            .select("*, development_phases(*)")
+            .is("deleted_at", null)
+            .order("updated_at", { ascending: false }),
+          supabase
+            .from("qa_priorities")
+            .select("development_id, sort_order")
+            .order("sort_order", { ascending: true }),
+        ]);
+        if (!developmentResult.error) {
+          const loadedItems = (developmentResult.data ?? []).map(mapDatabaseRow);
+          setItems(loadedItems);
+          if (!priorityResult.error) {
+            const qualityIds = new Set(
+              loadedItems.filter((item) => item.status === "품질진행").map((item) => item.id),
+            );
+            setPriorityIds(
+              (priorityResult.data ?? [])
+                .map((row) => String(row.development_id))
+                .filter((id) => qualityIds.has(id)),
+            );
+          }
+        }
       }
       setLoading(false);
     };
@@ -165,6 +240,12 @@ export default function DevelopmentManager() {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
     }
   }, [items]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      window.localStorage.setItem(PRIORITY_STORAGE_KEY, JSON.stringify(priorityIds));
+    }
+  }, [priorityIds]);
 
   useEffect(() => {
     if (!toast) return;
@@ -198,17 +279,19 @@ export default function DevelopmentManager() {
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const daysCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
   const days = Array.from({ length: daysCount }, (_, index) => index + 1);
-  const today = new Date(2026, 7, 10);
+  const today = new Date();
   const isCurrentMonth =
     month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth();
-  const openIssues = items.reduce(
-    (count, item) => count + item.issues.filter((issue) => issue.status !== "해결").length,
-    0,
-  );
-  const activeCount = items.filter((item) => !["완료", "보류"].includes(item.status)).length;
+  const activeCount = items.filter((item) => ["개발진행", "품질진행"].includes(item.status)).length;
+  const completedCount = items.filter((item) => item.status === "완료").length;
   const delayedCount = items.filter((item) => {
     const end = item.phases.map((phase) => phase.end).sort().at(-1);
-    return end && end < localDate(today) && weightedProgress(item) < 100;
+    return (
+      item.status !== "완료" &&
+      end &&
+      end < localDate(today) &&
+      weightedProgress(item) < 100
+    );
   }).length;
 
   const changeMonth = (offset: number) => {
@@ -238,7 +321,6 @@ export default function DevelopmentManager() {
       customer: development.customer,
       region: development.region,
       category: development.category,
-      priority: development.priority,
       status: development.status,
       summary: development.summary,
       requirements: development.requirements,
@@ -277,9 +359,112 @@ export default function DevelopmentManager() {
     return true;
   };
 
+  const savePriorityOrder = async (ids: string[], successMessage?: string) => {
+    const qualityIds = new Set(
+      items.filter((item) => item.status === "품질진행").map((item) => item.id),
+    );
+    const nextIds = Array.from(new Set(ids)).filter((id) => qualityIds.has(id));
+    const supabase = getSupabaseBrowserClient();
+
+    if (supabase) {
+      const { error: deleteError } = await supabase
+        .from("qa_priorities")
+        .delete()
+        .gte("sort_order", 0);
+      if (deleteError) {
+        showMessage(`우선순위 저장 실패: ${deleteError.message}`);
+        return false;
+      }
+
+      if (nextIds.length) {
+        const { error: insertError } = await supabase.from("qa_priorities").insert(
+          nextIds.map((developmentId, index) => ({
+            development_id: developmentId,
+            sort_order: index,
+          })),
+        );
+        if (insertError) {
+          showMessage(`우선순위 저장 실패: ${insertError.message}`);
+          return false;
+        }
+      }
+    }
+
+    setPriorityIds(nextIds);
+    if (successMessage) showMessage(successMessage);
+    return true;
+  };
+
   const quickStatusChange = async (status: DevelopmentStatus) => {
     if (!selected) return;
-    await saveDevelopment({ ...selected, status, updatedAt: new Date().toISOString() });
+    const saved = await saveDevelopment({
+      ...selected,
+      status,
+      phases: phasesForStatus(selected.phases, status),
+      updatedAt: new Date().toISOString(),
+    });
+    if (saved && status !== "품질진행" && priorityIds.includes(selected.id)) {
+      await savePriorityOrder(priorityIds.filter((id) => id !== selected.id));
+    }
+  };
+
+  const deleteDevelopment = async (development: Development) => {
+    if (!window.confirm(`'${development.name}' 개발 건을 삭제할까요?`)) return;
+
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      const { error } = await supabase
+        .from("developments")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", development.id);
+      if (error) {
+        showMessage(`삭제 실패: ${error.message}`);
+        return;
+      }
+    }
+
+    setItems((current) => current.filter((item) => item.id !== development.id));
+    if (priorityIds.includes(development.id)) {
+      await savePriorityOrder(priorityIds.filter((id) => id !== development.id));
+    }
+    setSelectedId(null);
+    showMessage("개발 건을 삭제했습니다.");
+  };
+
+  const priorityItems = priorityIds
+    .map((id) => items.find((item) => item.id === id))
+    .filter((item): item is Development => Boolean(item && item.status === "품질진행"));
+  const priorityCandidates = items.filter(
+    (item) => item.status === "품질진행" && !priorityIds.includes(item.id),
+  );
+
+  const addPriorityItems = async (ids: string[]) => {
+    const saved = await savePriorityOrder(
+      [...priorityIds, ...ids],
+      ids.length ? `${ids.length}건을 우선순위에 추가했습니다.` : undefined,
+    );
+    if (saved) setShowPriorityPicker(false);
+  };
+
+  const movePriority = async (developmentId: string, offset: number) => {
+    const currentIndex = priorityIds.indexOf(developmentId);
+    const nextIndex = currentIndex + offset;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= priorityIds.length) return;
+    const nextIds = [...priorityIds];
+    [nextIds[currentIndex], nextIds[nextIndex]] = [nextIds[nextIndex], nextIds[currentIndex]];
+    await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
+  };
+
+  const dropPriority = async (targetId: string, placeAfter: boolean) => {
+    if (!draggingPriorityId || draggingPriorityId === targetId) {
+      setDraggingPriorityId(null);
+      return;
+    }
+    const nextIds = priorityIds.filter((id) => id !== draggingPriorityId);
+    const targetIndex = nextIds.indexOf(targetId);
+    nextIds.splice(targetIndex + (placeAfter ? 1 : 0), 0, draggingPriorityId);
+    setDraggingPriorityId(null);
+    await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
   };
 
   const exportCsv = () => {
@@ -330,20 +515,35 @@ export default function DevelopmentManager() {
           <div><strong>MYBI</strong><small>개발업무관리</small></div>
         </div>
         <nav className="main-nav" aria-label="주요 메뉴">
-          {menuItems.map((item, index) => (
-            <button className={index === 0 ? "active" : ""} key={item} onClick={() => index !== 0 && showMessage("2차 개발 범위에 포함된 메뉴입니다.")}>
-              <span className="nav-icon" aria-hidden="true">{["▦", "≡", "!", "▥"][index]}</span>
-              {item}
-              {item === "이슈 관리" && <em>{openIssues}</em>}
+          {menuItems.map((item) => (
+            <button
+              className={activeView === item.id ? "active" : ""}
+              key={item.id}
+              onClick={() => {
+                if (item.id === "dashboard" || item.id === "priority") {
+                  setActiveView(item.id);
+                  setSelectedId(null);
+                  return;
+                }
+                showMessage("전체 개발 목록은 다음 단계에서 연결합니다.");
+              }}
+            >
+              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+              {item.label}
             </button>
           ))}
         </nav>
-        <div className="sidebar-bottom">
-          <div className="user-card">
-            <span className="avatar">{(userEmail ?? "조준우").slice(0, 1).toUpperCase()}</span>
-            <div><strong>{userEmail ? userEmail.split("@")[0] : "조준우"}</strong><small>PM / 매니저</small></div>
+        <div className="sidebar-footer">
+          <button className="account-menu" onClick={() => showMessage("계정 관리는 다음 단계에서 연결합니다.")}>
+            <span aria-hidden="true">♙</span> 계정 관리
+          </button>
+          <div className="sidebar-bottom">
+            <div className="user-card">
+              <span className="avatar">{(userEmail ?? "조준우").slice(0, 1).toUpperCase()}</span>
+              <div><strong>{userEmail ? userEmail.split("@")[0] : "조준우"}</strong><small>PM / 매니저</small></div>
+            </div>
+            <button className="settings-button" onClick={() => showMessage("관리자 설정은 다음 단계에서 연결합니다.")}>⚙</button>
           </div>
-          <button className="settings-button" onClick={() => showMessage("관리자 설정은 다음 단계에서 연결합니다.")}>⚙</button>
         </div>
       </aside>
 
@@ -351,31 +551,39 @@ export default function DevelopmentManager() {
         <header className="topbar">
           <div>
             <p className="eyebrow">차량내디바이스팀</p>
-            <h1>개발 일정 대시보드</h1>
+            <h1>{activeView === "priority" ? "우선 순위" : "개발 일정 대시보드"}</h1>
           </div>
           <div className="top-actions">
             <span className={`mode-pill ${isSupabaseConfigured ? "db" : "demo"}`}>
               <i /> {isSupabaseConfigured ? "DB 연결" : "데모 모드"}
             </span>
             <button className="icon-button" aria-label="알림" onClick={() => showMessage("새 알림이 없습니다.")}>♢</button>
-            <button className="primary-button" onClick={() => setShowForm(true)}><span>＋</span> 개발 등록</button>
+            {activeView === "dashboard" ? (
+              <button className="primary-button" onClick={() => setShowForm(true)}><span>＋</span> 개발 등록</button>
+            ) : (
+              <button className="primary-button" onClick={() => setShowPriorityPicker(true)}><span>＋</span> 우선순위 추가</button>
+            )}
           </div>
         </header>
 
-        <section className="stat-grid" aria-label="일정 요약">
-          <StatCard label="전체 개발" value={items.length} helper="등록된 개발 건" tone="navy" icon="▦" />
-          <StatCard label="진행 중" value={activeCount} helper="이번 달 작업" tone="blue" icon="▶" />
-          <StatCard label="열린 이슈" value={openIssues} helper="확인 필요" tone="orange" icon="!" />
-          <StatCard label="지연" value={delayedCount} helper={delayedCount ? "조치 필요" : "정상 진행"} tone="red" icon="↗" />
-        </section>
+        {activeView === "dashboard" ? <>
+          <section className="stat-grid" aria-label="일정 요약">
+            <StatCard label="전체 개발" value={items.length} helper="등록된 개발 건" tone="navy" icon="▦" />
+            <StatCard label="진행 중" value={activeCount} helper="건 수" tone="blue" icon="▶" />
+            <StatCard label="완료" value={completedCount} helper="건 수" tone="green" icon="✓" />
+            <StatCard label="지연" value={delayedCount} helper="건 수" tone="red" icon="↗" />
+          </section>
 
-        <section className="schedule-card">
+          <section className="schedule-card">
           <div className="schedule-toolbar">
             <div className="month-control">
               <button onClick={() => changeMonth(-1)} aria-label="이전 달">‹</button>
               <strong>{month.getFullYear()}년 {month.getMonth() + 1}월</strong>
               <button onClick={() => changeMonth(1)} aria-label="다음 달">›</button>
-              <button className="today-button" onClick={() => setMonth(new Date(2026, 7, 1))}>오늘</button>
+              <button className="today-button" onClick={() => {
+                const current = new Date();
+                setMonth(new Date(current.getFullYear(), current.getMonth(), 1));
+              }}>오늘</button>
             </div>
             <div className="view-switch" aria-label="보기 방식">
               <button className="active">월간</button><button onClick={() => showMessage("분기 보기는 2차 범위입니다.")}>분기</button>
@@ -389,7 +597,7 @@ export default function DevelopmentManager() {
               {query && <button onClick={() => setQuery("")} aria-label="검색어 지우기">×</button>}
             </label>
             <FilterSelect value={statusFilter} onChange={setStatusFilter} options={["전체 상태", ...statusOptions]} />
-            <FilterSelect value={categoryFilter} onChange={setCategoryFilter} options={["전체 구분", "프로젝트", "유지보수", "공통수정", "내부개선"]} />
+            <FilterSelect value={categoryFilter} onChange={setCategoryFilter} options={["전체 구분", "프로젝트", "유지보수"]} />
             <FilterSelect value={assigneeFilter} onChange={setAssigneeFilter} options={["전체 담당자", ...assignees]} />
             <button className="export-button" onClick={exportCsv}>⇩ 내보내기</button>
           </div>
@@ -423,13 +631,32 @@ export default function DevelopmentManager() {
               )}
             </div>
           </div>
-        </section>
+          </section>
+        </> : (
+          <PriorityBoard
+            items={priorityItems}
+            draggingId={draggingPriorityId}
+            onAdd={() => setShowPriorityPicker(true)}
+            onDragStart={setDraggingPriorityId}
+            onDragEnd={() => setDraggingPriorityId(null)}
+            onDrop={dropPriority}
+            onMove={movePriority}
+            onRemove={(id) => savePriorityOrder(priorityIds.filter((itemId) => itemId !== id), "우선순위에서 제외했습니다.")}
+          />
+        )}
       </section>
 
       {selected && (
-        <DetailPanel item={selected} onClose={() => setSelectedId(null)} onStatusChange={quickStatusChange} onMessage={showMessage} />
+        <DetailPanel item={selected} onClose={() => setSelectedId(null)} onStatusChange={quickStatusChange} onDelete={deleteDevelopment} onMessage={showMessage} />
       )}
       {showForm && <DevelopmentForm items={items} onClose={() => setShowForm(false)} onSave={saveDevelopment} />}
+      {showPriorityPicker && (
+        <PriorityPicker
+          items={priorityCandidates}
+          onClose={() => setShowPriorityPicker(false)}
+          onConfirm={addPriorityItems}
+        />
+      )}
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
     </main>
   );
@@ -437,6 +664,133 @@ export default function DevelopmentManager() {
 
 function StatCard({ label, value, helper, tone, icon }: { label: string; value: number; helper: string; tone: string; icon: string }) {
   return <article className={`stat-card ${tone}`}><span className="stat-icon">{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{helper}</small></div></article>;
+}
+
+function PriorityBoard({ items, draggingId, onAdd, onDragStart, onDragEnd, onDrop, onMove, onRemove }: {
+  items: Development[];
+  draggingId: string | null;
+  onAdd: () => void;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  onDrop: (id: string, placeAfter: boolean) => void;
+  onMove: (id: string, offset: number) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <section className="priority-board" aria-labelledby="priority-title">
+      <header className="priority-board-head">
+        <div>
+          <p>QUALITY TEST PRIORITY</p>
+          <h2 id="priority-title">품질 테스트 우선순위</h2>
+          <small>카드를 마우스로 잡아 위아래로 이동하면 테스트 순서가 저장됩니다.</small>
+        </div>
+        <span>총 {items.length}건</span>
+      </header>
+      {items.length ? (
+        <div className="priority-list">
+          {items.map((item, index) => {
+            const qaPhase = item.phases.find((phase) => phase.type === "QA");
+            return (
+              <article
+                key={item.id}
+                className={`priority-card ${draggingId === item.id ? "dragging" : ""}`}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  onDragStart(item.id);
+                }}
+                onDragEnd={onDragEnd}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  onDrop(item.id, event.clientY > bounds.top + bounds.height / 2);
+                }}
+              >
+                <span className="priority-rank">{index + 1}</span>
+                <span className="drag-handle" aria-hidden="true">⠿</span>
+                <div className="priority-card-body">
+                  <div className="priority-card-title">
+                    <div><strong>{item.name}</strong><small>{item.code} · {item.customer} · {item.region}</small></div>
+                    <span className="status-badge status-품질진행">품질진행</span>
+                  </div>
+                  <dl>
+                    <div><dt>품질 일정</dt><dd>{qaPhase ? `${formatShortDate(qaPhase.start)} ~ ${formatShortDate(qaPhase.end)}` : "미정"}</dd></div>
+                    <div><dt>담당자</dt><dd>{item.assignees.join(" · ") || "미지정"}</dd></div>
+                    <div><dt>배포 예정</dt><dd>{item.deploymentDate ?? "미정"}</dd></div>
+                  </dl>
+                </div>
+                <div className="priority-card-actions">
+                  <button onClick={() => onMove(item.id, -1)} disabled={index === 0} aria-label={`${item.name} 위로 이동`}>↑</button>
+                  <button onClick={() => onMove(item.id, 1)} disabled={index === items.length - 1} aria-label={`${item.name} 아래로 이동`}>↓</button>
+                  <button className="remove" onClick={() => onRemove(item.id)} aria-label={`${item.name} 우선순위에서 제외`}>×</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="priority-empty">
+          <span aria-hidden="true">↕</span>
+          <strong>등록된 품질 테스트 우선순위가 없습니다.</strong>
+          <small>‘우선순위 추가’를 눌러 품질진행 상태의 개발 건을 선택하세요.</small>
+          <button className="primary-button" onClick={onAdd}><span>＋</span> 우선순위 추가</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PriorityPicker({ items, onClose, onConfirm }: {
+  items: Development[];
+  onClose: () => void;
+  onConfirm: (ids: string[]) => Promise<void>;
+}) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const toggle = (id: string) => {
+    setSelectedIds((current) => current.includes(id) ? current.filter((itemId) => itemId !== id) : [...current, id]);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedIds.length) return;
+    setSaving(true);
+    await onConfirm(selectedIds);
+    setSaving(false);
+  };
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="priority-picker" onSubmit={submit}>
+        <header>
+          <div><span>ADD QA PRIORITY</span><h2>우선순위 추가</h2><p>일정 대시보드에서 ‘품질진행’ 상태인 개발 건만 표시됩니다.</p></div>
+          <button type="button" onClick={onClose} aria-label="팝업 닫기">×</button>
+        </header>
+        <div className="priority-picker-list">
+          {items.length ? items.map((item) => {
+            const checked = selectedIds.includes(item.id);
+            return (
+              <label key={item.id} className={checked ? "checked" : ""}>
+                <input type="checkbox" checked={checked} onChange={() => toggle(item.id)} />
+                <span className="checkmark">✓</span>
+                <div><strong>{item.name}</strong><small>{item.code} · {item.customer} · {item.region}</small></div>
+                <em>{item.assignees.join(" · ") || "담당자 미지정"}</em>
+              </label>
+            );
+          }) : (
+            <div className="priority-picker-empty"><span>✓</span><strong>추가 가능한 개발 건이 없습니다.</strong><small>일정 대시보드에서 개발 건의 상태를 ‘품질진행’으로 변경해주세요.</small></div>
+          )}
+        </div>
+        <footer>
+          <span>{selectedIds.length}건 선택</span>
+          <button type="button" onClick={onClose}>취소</button>
+          <button className="solid" disabled={!selectedIds.length || saving}>{saving ? "저장 중..." : "선택 완료"}</button>
+        </footer>
+      </form>
+    </div>
+  );
 }
 
 function FilterSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[] }) {
@@ -457,17 +811,14 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
     return { left: `${((startDay - 1) / daysCount) * 100}%`, width: `${(length / daysCount) * 100}%` };
   };
   const progress = weightedProgress(item);
-  const issueCount = item.issues.filter((issue) => issue.status !== "해결").length;
   return (
     <button className={`timeline-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <div className="task-info">
-        <span className={`priority-dot ${item.priority}`} />
         <div className="task-title"><strong>{item.name}</strong><small>{item.code} · {item.customer} · {item.region}</small></div>
         <div className="task-meta">
           <span className="mini-avatars">{item.assignees.slice(0, 3).map((name, index) => <i key={name} style={{ zIndex: 3 - index }} title={name}>{name.slice(0, 1)}</i>)}</span>
           <span className={`status-badge status-${item.status}`}>{item.status}</span>
           <span className="row-progress"><i style={{ width: `${progress}%` }} />{progress}%</span>
-          {issueCount > 0 && <span className="issue-count">! {issueCount}</span>}
         </div>
       </div>
       <div className="timeline-track">
@@ -491,7 +842,7 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
   );
 }
 
-function DetailPanel({ item, onClose, onStatusChange, onMessage }: { item: Development; onClose: () => void; onStatusChange: (status: DevelopmentStatus) => void; onMessage: (message: string) => void }) {
+function DetailPanel({ item, onClose, onStatusChange, onDelete, onMessage }: { item: Development; onClose: () => void; onStatusChange: (status: DevelopmentStatus) => void; onDelete: (item: Development) => void; onMessage: (message: string) => void }) {
   const progress = weightedProgress(item);
   return (
     <aside className="detail-panel" aria-label="개발 상세">
@@ -508,7 +859,7 @@ function DetailPanel({ item, onClose, onStatusChange, onMessage }: { item: Devel
           <h3>기본 정보</h3>
           <dl className="detail-grid">
             <div><dt>고객사</dt><dd>{item.customer}</dd></div><div><dt>지역</dt><dd>{item.region}</dd></div>
-            <div><dt>개발 구분</dt><dd>{item.category}</dd></div><div><dt>우선순위</dt><dd><span className={`priority-text ${item.priority}`}>{item.priority}</span></dd></div>
+            <div className="wide"><dt>개발 구분</dt><dd>{item.category}</dd></div>
             <div className="wide"><dt>담당자</dt><dd>{item.assignees.join(" · ")}</dd></div>
             <div className="wide"><dt>배포 예정일</dt><dd>{item.deploymentDate ?? "미정"}</dd></div>
           </dl>
@@ -519,20 +870,19 @@ function DetailPanel({ item, onClose, onStatusChange, onMessage }: { item: Devel
           <h3>단계별 일정 <small>총 {item.phases.reduce((sum, phase) => sum + phase.md, 0)} MD</small></h3>
           <div className="phase-list">{item.phases.map((phase) => <article key={phase.id}><span className={`phase-chip ${phase.type.toLowerCase()}`}>{phaseMeta[phase.type].label}</span><div><strong>{formatShortDate(phase.start)} ~ {formatShortDate(phase.end)}</strong><small>{phase.md} MD</small></div><em>{phase.progress}%</em></article>)}</div>
         </section>
-        <section className="detail-section">
-          <h3>이슈 <small>{item.issues.length}건</small></h3>
-          <div className="issue-list">{item.issues.length ? item.issues.map((issue) => <article key={issue.id}><span className={`severity ${issue.severity}`}>!</span><div><strong>{issue.title}</strong><small>{issue.status}{issue.dueDate ? ` · ${formatShortDate(issue.dueDate)}까지` : ""}</small></div></article>) : <p className="no-issue">등록된 이슈가 없습니다.</p>}</div>
-          <button className="text-button" onClick={() => onMessage("이슈 등록 화면은 다음 단계에서 연결합니다.")}>＋ 이슈 추가</button>
-        </section>
       </div>
-      <div className="detail-actions"><button onClick={() => onMessage("수정 폼은 개발 등록 폼과 통합 예정입니다.")}>수정</button><button className="solid" onClick={() => onMessage("상세 변경사항을 저장했습니다.")}>저장</button></div>
+      <div className="detail-actions"><button className="danger" onClick={() => onDelete(item)}>삭제</button><button onClick={() => onMessage("수정 폼은 개발 등록 폼과 통합 예정입니다.")}>수정</button><button className="solid" onClick={() => onMessage("상세 변경사항을 저장했습니다.")}>저장</button></div>
     </aside>
   );
 }
 
 function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onClose: () => void; onSave: (item: Development) => Promise<boolean> }) {
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", customer: "마이비인프라", region: "", category: "프로젝트" as Development["category"], priority: "보통" as Development["priority"], assignee: "조준우", summary: "", requirements: "", start: "2026-08-17", end: "2026-08-28", businessMd: 2, developmentMd: 8, qaMd: 3, deploymentDate: "2026-08-31" });
+  const [form, setForm] = useState(() => {
+    const start = localDate(new Date());
+    const end = addDays(start, 11);
+    return { name: "", customer: "사업팀", region: "", category: "프로젝트" as Development["category"], assignee: "담당자", summary: "", requirements: "", start, end, businessMd: 2, developmentMd: 8, qaMd: 3, deploymentDate: addDays(end, 3) };
+  });
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.name.trim() || !form.region.trim()) return;
@@ -546,13 +896,13 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
     const development: Development = {
       id,
       code: createCode(items),
-      name: form.name.trim(), customer: form.customer.trim(), region: form.region.trim(), category: form.category, priority: form.priority,
-      status: "일정수립", summary: form.summary.trim(), requirements: form.requirements.trim(), assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean), deploymentDate: form.deploymentDate,
+      name: form.name.trim(), customer: form.customer.trim(), region: form.region.trim(), category: form.category,
+      status: "대기중", summary: form.summary.trim(), requirements: form.requirements.trim(), assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean), deploymentDate: form.deploymentDate,
       phases: [
         { id: crypto.randomUUID(), type: "BUSINESS", start: form.start, end: businessEnd, md: Number(form.businessMd), progress: 0 },
         { id: crypto.randomUUID(), type: "DEVELOPMENT", start: addDays(businessEnd, 1), end: addDays(qaStart, -1), md: Number(form.developmentMd), progress: 0 },
         { id: crypto.randomUUID(), type: "QA", start: qaStart, end: form.end, md: Number(form.qaMd), progress: 0 },
-      ], issues: [], updatedAt: new Date().toISOString(),
+      ], updatedAt: new Date().toISOString(),
     };
     if (await onSave(development)) onClose();
     setSaving(false);
@@ -567,8 +917,7 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
             <label className="wide">개발명 <input autoFocus required value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="예: 부산 승하차단말기 8BIN 적용" /></label>
             <label>고객사 <input value={form.customer} onChange={(e) => set("customer", e.target.value)} /></label>
             <label>지역 <input required value={form.region} onChange={(e) => set("region", e.target.value)} placeholder="예: 부산" /></label>
-            <label>개발 구분 <select value={form.category} onChange={(e) => set("category", e.target.value)}><option>프로젝트</option><option>유지보수</option><option>공통수정</option><option>내부개선</option></select></label>
-            <label>우선순위 <select value={form.priority} onChange={(e) => set("priority", e.target.value)}><option>긴급</option><option>높음</option><option>보통</option><option>낮음</option></select></label>
+            <label className="wide">개발 구분 <select value={form.category} onChange={(e) => set("category", e.target.value)}><option>프로젝트</option><option>유지보수</option></select></label>
             <label className="wide">담당자 <input value={form.assignee} onChange={(e) => set("assignee", e.target.value)} placeholder="여러 명은 쉼표로 구분" /><small>여러 명은 쉼표(,)로 구분하세요.</small></label>
             <label className="wide">개발 요약 <textarea value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={3} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
             <label className="wide">필요사항 <textarea value={form.requirements} onChange={(e) => set("requirements", e.target.value)} rows={2} placeholder="고객사 회신, 샘플 장비 등 선행 필요사항" /></label>

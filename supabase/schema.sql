@@ -7,9 +7,8 @@ create table if not exists public.developments (
   name text not null,
   customer text,
   region text,
-  category text not null check (category in ('프로젝트', '유지보수', '공통수정', '내부개선')),
-  priority text not null default '보통' check (priority in ('긴급', '높음', '보통', '낮음')),
-  status text not null default '요청' check (status in ('요청', '검토중', '일정수립', '개발대기', '개발중', '품질검증', '배포대기', '완료', '보류')),
+  category text not null check (category in ('프로젝트', '유지보수')),
+  status text not null default '대기중' check (status in ('대기중', '개발진행', '품질진행', '완료')),
   summary text,
   requirements text,
   assignee_names text[] not null default '{}',
@@ -35,6 +34,13 @@ create table if not exists public.development_phases (
   status text not null default '대기' check (status in ('대기', '진행중', '완료', '지연', '제외')),
   memo text,
   created_at timestamptz not null default now()
+);
+
+create table if not exists public.qa_priorities (
+  development_id uuid primary key references public.developments(id) on delete cascade,
+  sort_order integer not null check (sort_order >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.issues (
@@ -71,6 +77,7 @@ create table if not exists public.activity_logs (
 create index if not exists developments_status_idx on public.developments(status);
 create index if not exists developments_region_idx on public.developments(region);
 create index if not exists development_phases_development_id_idx on public.development_phases(development_id);
+create unique index if not exists qa_priorities_sort_order_idx on public.qa_priorities(sort_order);
 create index if not exists issues_development_id_idx on public.issues(development_id);
 
 create or replace function public.touch_updated_at()
@@ -89,12 +96,17 @@ drop trigger if exists developments_touch_updated_at on public.developments;
 create trigger developments_touch_updated_at before update on public.developments
 for each row execute function public.touch_updated_at();
 
+drop trigger if exists qa_priorities_touch_updated_at on public.qa_priorities;
+create trigger qa_priorities_touch_updated_at before update on public.qa_priorities
+for each row execute function public.touch_updated_at();
+
 drop trigger if exists issues_touch_updated_at on public.issues;
 create trigger issues_touch_updated_at before update on public.issues
 for each row execute function public.touch_updated_at();
 
 alter table public.developments enable row level security;
 alter table public.development_phases enable row level security;
+alter table public.qa_priorities enable row level security;
 alter table public.issues enable row level security;
 alter table public.comments enable row level security;
 alter table public.activity_logs enable row level security;
@@ -107,6 +119,11 @@ create policy "authenticated users read phases" on public.development_phases for
 create policy "authenticated users insert phases" on public.development_phases for insert to authenticated with check (true);
 create policy "authenticated users update phases" on public.development_phases for update to authenticated using (true) with check (true);
 create policy "authenticated users delete phases" on public.development_phases for delete to authenticated using (true);
+
+create policy "authenticated users read qa priorities" on public.qa_priorities for select to authenticated using (true);
+create policy "authenticated users insert qa priorities" on public.qa_priorities for insert to authenticated with check (true);
+create policy "authenticated users update qa priorities" on public.qa_priorities for update to authenticated using (true) with check (true);
+create policy "authenticated users delete qa priorities" on public.qa_priorities for delete to authenticated using (true);
 
 create policy "authenticated users manage issues" on public.issues for all to authenticated using (true) with check (true);
 create policy "authenticated users manage comments" on public.comments for all to authenticated using (true) with check (author_id = auth.uid());
