@@ -128,6 +128,12 @@ function describeDevelopmentChange(before: Development, after: Development) {
   return changes.slice(0, 2).join(" · ") || "개발업무 내용이 수정되었습니다.";
 }
 
+function notificationTarget(action: NotificationAction): AppNotification["targetView"] {
+  return action === "DEVELOPMENT_CREATED" || action === "DEVELOPMENT_UPDATED"
+    ? "dashboard"
+    : "priority";
+}
+
 function mapActivityNotification(row: Record<string, unknown>): AppNotification | null {
   const action = String(row.action) as NotificationAction;
   if (!notificationActions.includes(action)) return null;
@@ -138,7 +144,7 @@ function mapActivityNotification(row: Record<string, unknown>): AppNotification 
     title: String(changedData.title ?? "개발업무 알림"),
     message: String(changedData.message ?? "개발업무에 변경사항이 있습니다."),
     developmentId: row.development_id ? String(row.development_id) : undefined,
-    targetView: changedData.target_view === "dashboard" ? "dashboard" : "priority",
+    targetView: notificationTarget(action),
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };
 }
@@ -455,7 +461,7 @@ export default function DevelopmentManager() {
         title,
         message,
         developmentId,
-        targetView: "priority",
+        targetView: notificationTarget(action),
         createdAt: new Date().toISOString(),
       };
       let current = notifications;
@@ -480,7 +486,7 @@ export default function DevelopmentManager() {
         development_id: developmentId ?? null,
         actor_id: actorId,
         action,
-        changed_data: { title, message, target_view: "priority" },
+        changed_data: { title, message, target_view: notificationTarget(action) },
       })
       .select("id, development_id, action, changed_data, created_at")
       .single();
