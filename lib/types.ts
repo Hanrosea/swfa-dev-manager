@@ -30,3 +30,20 @@ export interface Development {
   phases: Phase[];
   updatedAt: string;
 }
+
+export type NotificationAction =
+  | "DEVELOPMENT_CREATED"
+  | "DEVELOPMENT_UPDATED"
+  | "QA_PRIORITY_ADDED"
+  | "QA_PRIORITY_REORDERED"
+  | "QA_PRIORITY_REMOVED";
+
+export interface AppNotification {
+  id: string;
+  action: NotificationAction;
+  title: string;
+  message: string;
+  developmentId?: string;
+  targetView: "dashboard" | "priority";
+  createdAt: string;
+}

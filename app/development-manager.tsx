@@ -1,18 +1,29 @@
 "use client";
 
 import { v4 as uuidv4 } from "uuid";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { initialDevelopments } from "@/lib/mock-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
 import type {
+  AppNotification,
   Development,
   DevelopmentStatus,
+  NotificationAction,
   Phase,
   PhaseType,
 } from "@/lib/types";
 
 const STORAGE_KEY = "mybi-infra-dev-manager-v1";
 const PRIORITY_STORAGE_KEY = "mybi-infra-qa-priority-v1";
+const NOTIFICATION_STORAGE_KEY = "mybi-infra-notifications-v1";
+const READ_NOTIFICATION_STORAGE_KEY = "mybi-infra-read-notifications-v1";
+const notificationActions: NotificationAction[] = [
+  "DEVELOPMENT_CREATED",
+  "DEVELOPMENT_UPDATED",
+  "QA_PRIORITY_ADDED",
+  "QA_PRIORITY_REORDERED",
+  "QA_PRIORITY_REMOVED",
+];
 const statusOptions: DevelopmentStatus[] = [
   "대기중",
   "개발진행",
@@ -79,6 +90,66 @@ function weightedProgress(item: Development) {
 function dateRange(item: Development) {
   const dates = item.phases.flatMap((phase) => [phase.start, phase.end]).sort();
   return `${formatShortDate(dates[0])} ~ ${formatShortDate(dates.at(-1))}`;
+}
+
+function scheduleBounds(item: Development) {
+  const dates = item.phases.flatMap((phase) => [phase.start, phase.end]).sort();
+  return { start: dates[0] ?? "", end: dates.at(-1) ?? "" };
+}
+
+function findScheduleConflicts(candidate: Development, items: Development[]) {
+  const candidateRange = scheduleBounds(candidate);
+  return items.filter((item) => {
+    const range = scheduleBounds(item);
+    return Boolean(
+      candidateRange.start &&
+      candidateRange.end &&
+      range.start &&
+      range.end &&
+      candidateRange.start <= range.end &&
+      candidateRange.end >= range.start,
+    );
+  });
+}
+
+function describeDevelopmentChange(before: Development, after: Development) {
+  const changes: string[] = [];
+  if (before.name !== after.name) changes.push(`개발명: ${before.name} → ${after.name}`);
+  if (before.status !== after.status) changes.push(`상태: ${before.status} → ${after.status}`);
+  if (dateRange(before) !== dateRange(after)) {
+    changes.push(`일정: ${dateRange(before)} → ${dateRange(after)}`);
+  }
+  if (before.assignees.join("|") !== after.assignees.join("|")) {
+    changes.push(`담당자: ${after.assignees.join(", ") || "미지정"}`);
+  }
+  if (before.summary !== after.summary || before.requirements !== after.requirements) {
+    changes.push("개발 내용 수정");
+  }
+  return changes.slice(0, 2).join(" · ") || "개발업무 내용이 수정되었습니다.";
+}
+
+function mapActivityNotification(row: Record<string, unknown>): AppNotification | null {
+  const action = String(row.action) as NotificationAction;
+  if (!notificationActions.includes(action)) return null;
+  const changedData = (row.changed_data as Record<string, unknown> | null) ?? {};
+  return {
+    id: String(row.id),
+    action,
+    title: String(changedData.title ?? "개발업무 알림"),
+    message: String(changedData.message ?? "개발업무에 변경사항이 있습니다."),
+    developmentId: row.development_id ? String(row.development_id) : undefined,
+    targetView: changedData.target_view === "dashboard" ? "dashboard" : "priority",
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+  };
+}
+
+function formatNotificationTime(value: string) {
+  const date = new Date(value);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
 }
 
 function createCode(items: Development[]) {
@@ -154,10 +225,44 @@ export default function DevelopmentManager() {
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "priority">("dashboard");
   const [priorityIds, setPriorityIds] = useState<string[]>([]);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [draggingPriorityId, setDraggingPriorityId] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+
+  const refreshNotifications = useCallback(async () => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      try {
+        const saved = window.localStorage.getItem(NOTIFICATION_STORAGE_KEY);
+        const parsed = saved ? (JSON.parse(saved) as AppNotification[]) : [];
+        setNotifications(Array.isArray(parsed) ? parsed.slice(0, 30) : []);
+      } catch {
+        window.localStorage.removeItem(NOTIFICATION_STORAGE_KEY);
+      }
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("id, development_id, action, changed_data, created_at")
+      .in("action", notificationActions)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (error) {
+      console.warn("알림을 불러오지 못했습니다.", error.message);
+      return;
+    }
+    setNotifications(
+      (data ?? [])
+        .map((row) => mapActivityNotification(row as Record<string, unknown>))
+        .filter((item): item is AppNotification => Boolean(item)),
+    );
+  }, []);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -197,6 +302,7 @@ export default function DevelopmentManager() {
       const { data: sessionData } = await supabase.auth.getSession();
       if (!mounted) return;
       setUserEmail(sessionData.session?.user.email ?? null);
+      setUserId(sessionData.session?.user.id ?? null);
       if (sessionData.session) {
         const [developmentResult, priorityResult] = await Promise.all([
           supabase
@@ -229,6 +335,7 @@ export default function DevelopmentManager() {
     load();
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUserEmail(session?.user.email ?? null);
+      setUserId(session?.user.id ?? null);
     });
     return () => {
       mounted = false;
@@ -247,6 +354,24 @@ export default function DevelopmentManager() {
       window.localStorage.setItem(PRIORITY_STORAGE_KEY, JSON.stringify(priorityIds));
     }
   }, [priorityIds]);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(READ_NOTIFICATION_STORAGE_KEY);
+      const parsed = saved ? (JSON.parse(saved) as string[]) : [];
+      if (Array.isArray(parsed)) queueMicrotask(() => setReadNotificationIds(parsed));
+    } catch {
+      window.localStorage.removeItem(READ_NOTIFICATION_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isSupabaseConfigured && !userId) return;
+    queueMicrotask(() => void refreshNotifications());
+    if (!isSupabaseConfigured) return;
+    const timer = window.setInterval(() => void refreshNotifications(), 15000);
+    return () => window.clearInterval(timer);
+  }, [userId, refreshNotifications]);
 
   useEffect(() => {
     if (!toast) return;
@@ -301,7 +426,138 @@ export default function DevelopmentManager() {
 
   const showMessage = (message: string) => setToast(message);
 
+  const storeReadNotificationIds = (ids: string[]) => {
+    const nextIds = Array.from(new Set(ids)).slice(0, 200);
+    setReadNotificationIds(nextIds);
+    window.localStorage.setItem(READ_NOTIFICATION_STORAGE_KEY, JSON.stringify(nextIds));
+  };
+
+  const markNotificationRead = (notificationId: string) => {
+    storeReadNotificationIds([notificationId, ...readNotificationIds]);
+  };
+
+  const createActivityNotification = async ({
+    action,
+    title,
+    message,
+    developmentId,
+  }: {
+    action: NotificationAction;
+    title: string;
+    message: string;
+    developmentId?: string;
+  }) => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      const notification: AppNotification = {
+        id: uuidv4(),
+        action,
+        title,
+        message,
+        developmentId,
+        targetView: "priority",
+        createdAt: new Date().toISOString(),
+      };
+      let current = notifications;
+      try {
+        const saved = window.localStorage.getItem(NOTIFICATION_STORAGE_KEY);
+        const parsed = saved ? (JSON.parse(saved) as AppNotification[]) : [];
+        if (Array.isArray(parsed)) current = parsed;
+      } catch {
+        window.localStorage.removeItem(NOTIFICATION_STORAGE_KEY);
+      }
+      const next = [notification, ...current].slice(0, 30);
+      setNotifications(next);
+      window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(next));
+      return true;
+    }
+
+    const actorId = userId ?? (await supabase.auth.getSession()).data.session?.user.id;
+    if (!actorId) return false;
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .insert({
+        development_id: developmentId ?? null,
+        actor_id: actorId,
+        action,
+        changed_data: { title, message, target_view: "priority" },
+      })
+      .select("id, development_id, action, changed_data, created_at")
+      .single();
+    if (error) {
+      console.warn("알림을 등록하지 못했습니다.", error.message);
+      return false;
+    }
+    const notification = mapActivityNotification(data as Record<string, unknown>);
+    if (notification) {
+      setNotifications((current) => [
+        notification,
+        ...current.filter((item) => item.id !== notification.id),
+      ].slice(0, 30));
+    }
+    return true;
+  };
+
+  const openNotification = async (notification: AppNotification) => {
+    markNotificationRead(notification.id);
+    setShowNotifications(false);
+    setActiveView(notification.targetView);
+    if (!notification.developmentId) {
+      setSelectedId(null);
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      const [developmentResult, priorityResult] = await Promise.all([
+        supabase
+          .from("developments")
+          .select("*, development_phases(*)")
+          .eq("id", notification.developmentId)
+          .is("deleted_at", null)
+          .maybeSingle(),
+        supabase
+          .from("qa_priorities")
+          .select("development_id, sort_order")
+          .order("sort_order", { ascending: true }),
+      ]);
+      if (developmentResult.data) {
+        const latest = mapDatabaseRow(developmentResult.data as Record<string, unknown>);
+        setItems((current) => [
+          latest,
+          ...current.filter((item) => item.id !== latest.id),
+        ]);
+        const range = scheduleBounds(latest);
+        if (range.start) {
+          const start = new Date(`${range.start}T00:00:00`);
+          setMonth(new Date(start.getFullYear(), start.getMonth(), 1));
+        }
+      }
+      if (!priorityResult.error) {
+        setPriorityIds((priorityResult.data ?? []).map((row) => String(row.development_id)));
+      }
+    }
+    setSelectedId(notification.developmentId);
+  };
+
+  const handleLogout = async () => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      showMessage("데모 모드에서는 로그아웃이 필요하지 않습니다.");
+      return;
+    }
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) {
+      showMessage(`로그아웃 실패: ${error.message}`);
+      return;
+    }
+    setUserEmail(null);
+    setUserId(null);
+    setSelectedId(null);
+  };
+
   const saveDevelopment = async (development: Development) => {
+    const previous = items.find((item) => item.id === development.id);
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       setItems((current) => {
@@ -311,6 +567,14 @@ export default function DevelopmentManager() {
           : [development, ...current];
       });
       setSelectedId(development.id);
+      await createActivityNotification({
+        action: previous ? "DEVELOPMENT_UPDATED" : "DEVELOPMENT_CREATED",
+        title: previous ? "개발업무 수정" : "개발업무 업로드",
+        message: previous
+          ? `“${development.name}” ${describeDevelopmentChange(previous, development)}`
+          : `“${development.name}” 개발업무가 등록되었습니다.`,
+        developmentId: development.id,
+      });
       showMessage("변경사항을 저장했습니다.");
       return true;
     }
@@ -356,6 +620,14 @@ export default function DevelopmentManager() {
         : [development, ...current];
     });
     setSelectedId(development.id);
+    await createActivityNotification({
+      action: previous ? "DEVELOPMENT_UPDATED" : "DEVELOPMENT_CREATED",
+      title: previous ? "개발업무 수정" : "개발업무 업로드",
+      message: previous
+        ? `“${development.name}” ${describeDevelopmentChange(previous, development)}`
+        : `“${development.name}” 개발업무가 등록되었습니다.`,
+      developmentId: development.id,
+    });
     showMessage("DB에 저장했습니다.");
     return true;
   };
@@ -405,7 +677,15 @@ export default function DevelopmentManager() {
       updatedAt: new Date().toISOString(),
     });
     if (saved && status !== "품질진행" && priorityIds.includes(selected.id)) {
-      await savePriorityOrder(priorityIds.filter((id) => id !== selected.id));
+      const removed = await savePriorityOrder(priorityIds.filter((id) => id !== selected.id));
+      if (removed) {
+        await createActivityNotification({
+          action: "QA_PRIORITY_REMOVED",
+          title: "품질진행 목록 수정",
+          message: `“${selected.name}” 품질 테스트가 목록에서 제외되었습니다.`,
+          developmentId: selected.id,
+        });
+      }
     }
   };
 
@@ -444,7 +724,19 @@ export default function DevelopmentManager() {
       [...priorityIds, ...ids],
       ids.length ? `${ids.length}건을 우선순위에 추가했습니다.` : undefined,
     );
-    if (saved) setShowPriorityPicker(false);
+    if (saved) {
+      for (const id of ids) {
+        const development = items.find((item) => item.id === id);
+        if (!development) continue;
+        await createActivityNotification({
+          action: "QA_PRIORITY_ADDED",
+          title: "품질진행 업로드",
+          message: `“${development.name}” 품질 테스트가 등록되었습니다.`,
+          developmentId: id,
+        });
+      }
+      setShowPriorityPicker(false);
+    }
   };
 
   const movePriority = async (developmentId: string, offset: number) => {
@@ -452,8 +744,19 @@ export default function DevelopmentManager() {
     const nextIndex = currentIndex + offset;
     if (currentIndex < 0 || nextIndex < 0 || nextIndex >= priorityIds.length) return;
     const nextIds = [...priorityIds];
+    const displacedId = nextIds[nextIndex];
     [nextIds[currentIndex], nextIds[nextIndex]] = [nextIds[nextIndex], nextIds[currentIndex]];
-    await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
+    const saved = await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
+    if (saved) {
+      const moved = items.find((item) => item.id === developmentId);
+      const displaced = items.find((item) => item.id === displacedId);
+      await createActivityNotification({
+        action: "QA_PRIORITY_REORDERED",
+        title: "품질진행 순서 변경",
+        message: `“${moved?.name ?? "개발업무"}”과 “${displaced?.name ?? "개발업무"}” 순서가 변경되었습니다.`,
+        developmentId,
+      });
+    }
   };
 
   const dropPriority = async (targetId: string, placeAfter: boolean) => {
@@ -464,8 +767,35 @@ export default function DevelopmentManager() {
     const nextIds = priorityIds.filter((id) => id !== draggingPriorityId);
     const targetIndex = nextIds.indexOf(targetId);
     nextIds.splice(targetIndex + (placeAfter ? 1 : 0), 0, draggingPriorityId);
+    const movedId = draggingPriorityId;
     setDraggingPriorityId(null);
-    await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
+    const saved = await savePriorityOrder(nextIds, "우선순위 순서를 저장했습니다.");
+    if (saved) {
+      const moved = items.find((item) => item.id === movedId);
+      const target = items.find((item) => item.id === targetId);
+      await createActivityNotification({
+        action: "QA_PRIORITY_REORDERED",
+        title: "품질진행 순서 변경",
+        message: `“${moved?.name ?? "개발업무"}”과 “${target?.name ?? "개발업무"}” 순서가 변경되었습니다.`,
+        developmentId: movedId,
+      });
+    }
+  };
+
+  const removePriority = async (developmentId: string) => {
+    const development = items.find((item) => item.id === developmentId);
+    const saved = await savePriorityOrder(
+      priorityIds.filter((itemId) => itemId !== developmentId),
+      "우선순위에서 제외했습니다.",
+    );
+    if (saved) {
+      await createActivityNotification({
+        action: "QA_PRIORITY_REMOVED",
+        title: "품질진행 목록 수정",
+        message: `“${development?.name ?? "개발업무"}” 품질 테스트가 목록에서 제외되었습니다.`,
+        developmentId,
+      });
+    }
   };
 
   const exportCsv = () => {
@@ -494,6 +824,9 @@ export default function DevelopmentManager() {
     URL.revokeObjectURL(url);
     showMessage("현재 목록을 CSV로 내려받았습니다.");
   };
+
+  const unreadNotificationIds = new Set(readNotificationIds);
+  const unreadCount = notifications.filter((item) => !unreadNotificationIds.has(item.id)).length;
 
   if (loading) {
     return (
@@ -535,8 +868,8 @@ export default function DevelopmentManager() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <button className="account-menu" onClick={() => showMessage("계정 관리는 다음 단계에서 연결합니다.")}>
-            <span aria-hidden="true">♙</span> 계정 관리
+          <button className="account-menu" onClick={handleLogout}>
+            <span aria-hidden="true">⇥</span> 로그아웃
           </button>
           <div className="sidebar-bottom">
             <div className="user-card">
@@ -558,7 +891,30 @@ export default function DevelopmentManager() {
             <span className={`mode-pill ${isSupabaseConfigured ? "db" : "demo"}`}>
               <i /> {isSupabaseConfigured ? "DB 연결" : "데모 모드"}
             </span>
-            <button className="icon-button" aria-label="알림" onClick={() => showMessage("새 알림이 없습니다.")}>♢</button>
+            <div className="notification-wrapper">
+              <button
+                className={`icon-button notification-button ${showNotifications ? "active" : ""}`}
+                aria-label={`알림 ${unreadCount}건`}
+                aria-expanded={showNotifications}
+                onClick={() => setShowNotifications((current) => !current)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+                </svg>
+                {unreadCount > 0 && (
+                  <span className="notification-badge">{unreadCount > 99 ? "99+" : unreadCount}</span>
+                )}
+              </button>
+              {showNotifications && (
+                <NotificationPopover
+                  items={notifications}
+                  readIds={unreadNotificationIds}
+                  onOpen={openNotification}
+                  onReadAll={() => storeReadNotificationIds(notifications.map((item) => item.id))}
+                  onClose={() => setShowNotifications(false)}
+                />
+              )}
+            </div>
             {activeView === "dashboard" ? (
               <button className="primary-button" onClick={() => setShowForm(true)}><span>＋</span> 개발 등록</button>
             ) : (
@@ -642,7 +998,7 @@ export default function DevelopmentManager() {
             onDragEnd={() => setDraggingPriorityId(null)}
             onDrop={dropPriority}
             onMove={movePriority}
-            onRemove={(id) => savePriorityOrder(priorityIds.filter((itemId) => itemId !== id), "우선순위에서 제외했습니다.")}
+            onRemove={removePriority}
           />
         )}
       </section>
@@ -665,6 +1021,49 @@ export default function DevelopmentManager() {
 
 function StatCard({ label, value, helper, tone, icon }: { label: string; value: number; helper: string; tone: string; icon: string }) {
   return <article className={`stat-card ${tone}`}><span className="stat-icon">{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{helper}</small></div></article>;
+}
+
+function NotificationPopover({ items, readIds, onOpen, onReadAll, onClose }: {
+  items: AppNotification[];
+  readIds: Set<string>;
+  onOpen: (notification: AppNotification) => void;
+  onReadAll: () => void;
+  onClose: () => void;
+}) {
+  const unreadCount = items.filter((item) => !readIds.has(item.id)).length;
+  return (
+    <section className="notification-popover" aria-label="알림 목록">
+      <header>
+        <div><strong>알림</strong><span>{unreadCount}건 읽지 않음</span></div>
+        <button type="button" onClick={onClose} aria-label="알림 닫기">×</button>
+      </header>
+      {items.length ? (
+        <div className="notification-list">
+          {items.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={readIds.has(item.id) ? "read" : "unread"}
+              onClick={() => onOpen(item)}
+            >
+              <i aria-hidden="true" />
+              <span>
+                <strong>{item.title}</strong>
+                <small>{item.message}</small>
+                <em>{formatNotificationTime(item.createdAt)}</em>
+              </span>
+              <b aria-hidden="true">›</b>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="notification-empty"><span>✓</span><strong>새 알림이 없습니다.</strong><small>개발업무와 품질진행 변경사항이 여기에 표시됩니다.</small></div>
+      )}
+      {items.length > 0 && (
+        <footer><button type="button" onClick={onReadAll} disabled={!unreadCount}>모두 읽음으로 표시</button></footer>
+      )}
+    </section>
+  );
 }
 
 function PriorityBoard({ items, draggingId, onAdd, onDragStart, onDragEnd, onDrop, onMove, onRemove }: {
@@ -879,6 +1278,8 @@ function DetailPanel({ item, onClose, onStatusChange, onDelete, onMessage }: { i
 
 function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onClose: () => void; onSave: (item: Development) => Promise<boolean> }) {
   const [saving, setSaving] = useState(false);
+  const [scheduleConflicts, setScheduleConflicts] = useState<Development[]>([]);
+  const [pendingDevelopment, setPendingDevelopment] = useState<Development | null>(null);
   const [form, setForm] = useState(() => {
     const start = localDate(new Date());
     const end = addDays(start, 11);
@@ -905,7 +1306,20 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
         { id: uuidv4(), type: "QA", start: qaStart, end: form.end, md: Number(form.qaMd), progress: 0 },
       ], updatedAt: new Date().toISOString(),
     };
+    const conflicts = findScheduleConflicts(development, items);
+    if (conflicts.length) {
+      setPendingDevelopment(development);
+      setScheduleConflicts(conflicts);
+      setSaving(false);
+      return;
+    }
     if (await onSave(development)) onClose();
+    setSaving(false);
+  };
+  const saveWithConflicts = async () => {
+    if (!pendingDevelopment) return;
+    setSaving(true);
+    if (await onSave(pendingDevelopment)) onClose();
     setSaving(false);
   };
   const set = (key: keyof typeof form, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
@@ -934,6 +1348,26 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
         </div>
         <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : "개발 건 등록"}</button></footer>
       </form>
+      {pendingDevelopment && scheduleConflicts.length > 0 && (
+        <div className="conflict-backdrop">
+          <section className="conflict-dialog" role="alertdialog" aria-modal="true" aria-labelledby="conflict-title">
+            <header><span aria-hidden="true">!</span><div><small>SCHEDULE OVERLAP</small><h3 id="conflict-title">중복 일정 {scheduleConflicts.length}건이 있습니다.</h3></div></header>
+            <p><strong>{pendingDevelopment.name}</strong>의 일정과 아래 개발업무가 겹칩니다.</p>
+            <div className="conflict-list">
+              {scheduleConflicts.map((item) => (
+                <article key={item.id}>
+                  <div><strong>{item.name}</strong><small>{item.code} · {item.status}</small></div>
+                  <span>{dateRange(item)}</span>
+                </article>
+              ))}
+            </div>
+            <footer>
+              <button type="button" onClick={() => { setPendingDevelopment(null); setScheduleConflicts([]); }}>일정 다시 확인</button>
+              <button type="button" className="solid warning" disabled={saving} onClick={saveWithConflicts}>{saving ? "등록 중..." : "그래도 등록"}</button>
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
