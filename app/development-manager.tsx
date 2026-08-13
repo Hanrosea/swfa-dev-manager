@@ -224,9 +224,9 @@ export default function DevelopmentManager() {
     return new Date(current.getFullYear(), current.getMonth(), 1);
   });
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("전체 상태");
-  const [categoryFilter, setCategoryFilter] = useState("전체 구분");
-  const [assigneeFilter, setAssigneeFilter] = useState("전체 담당자");
+  const [statusFilters, setStatusFilters] = useState<DevelopmentStatus[]>([]);
+  const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
+  const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(isSupabaseConfigured);
@@ -401,12 +401,12 @@ export default function DevelopmentManager() {
           .includes(normalized);
       return (
         matchesQuery &&
-        (statusFilter === "전체 상태" || item.status === statusFilter) &&
-        (categoryFilter === "전체 구분" || item.category === categoryFilter) &&
-        (assigneeFilter === "전체 담당자" || item.assignees.includes(assigneeFilter))
+        (!statusFilters.length || statusFilters.includes(item.status)) &&
+        (!categoryFilters.length || categoryFilters.includes(item.category)) &&
+        (!assigneeFilters.length || item.assignees.some((name) => assigneeFilters.includes(name)))
       );
     });
-  }, [items, query, statusFilter, categoryFilter, assigneeFilter]);
+  }, [items, query, statusFilters, categoryFilters, assigneeFilters]);
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const daysCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
@@ -959,9 +959,9 @@ export default function DevelopmentManager() {
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="개발명, 고객사, 지역 검색" />
               {query && <button onClick={() => setQuery("")} aria-label="검색어 지우기">×</button>}
             </label>
-            <FilterSelect value={statusFilter} onChange={setStatusFilter} options={["전체 상태", ...statusOptions]} />
-            <FilterSelect value={categoryFilter} onChange={setCategoryFilter} options={["전체 구분", "프로젝트", "유지보수"]} />
-            <FilterSelect value={assigneeFilter} onChange={setAssigneeFilter} options={["전체 담당자", ...assignees]} />
+            <MultiFilterSelect label="상태" allLabel="전체 상태" values={statusFilters} onChange={setStatusFilters} options={statusOptions} />
+            <MultiFilterSelect label="구분" allLabel="전체 구분" values={categoryFilters} onChange={setCategoryFilters} options={["프로젝트", "유지보수"]} />
+            <MultiFilterSelect label="담당자" allLabel="전체 담당자" values={assigneeFilters} onChange={setAssigneeFilters} options={assignees} />
             <button className="export-button" onClick={exportCsv}>⇩ 내보내기</button>
           </div>
 
@@ -1199,8 +1199,33 @@ function PriorityPicker({ items, onClose, onConfirm }: {
   );
 }
 
-function FilterSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[] }) {
-  return <label className="filter-select"><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+function MultiFilterSelect<T extends string>({ label, allLabel, values, onChange, options }: { label: string; allLabel: string; values: T[]; onChange: (values: T[]) => void; options: readonly T[] }) {
+  const toggle = (option: T) => {
+    onChange(values.includes(option) ? values.filter((value) => value !== option) : [...values, option]);
+  };
+  const summary = values.length === 0 ? allLabel : values.length === 1 ? values[0] : `${label} ${values.length}개`;
+
+  return (
+    <details className="multi-filter">
+      <summary className={values.length ? "filtered" : ""}><span>{summary}</span><i aria-hidden="true">⌄</i></summary>
+      <div className="multi-filter-menu" role="group" aria-label={`${label} 필터`}>
+        <label className={!values.length ? "checked" : ""}>
+          <input type="checkbox" checked={!values.length} onChange={() => onChange([])} />
+          <span className="multi-check">✓</span><em>{allLabel}</em>
+        </label>
+        <div className="multi-filter-divider" />
+        {options.map((option) => {
+          const checked = values.includes(option);
+          return (
+            <label key={option} className={checked ? "checked" : ""}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(option)} />
+              <span className="multi-check">✓</span><em>{option}</em>
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
 }
 
 function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { item: Development; month: Date; daysCount: number; today: Date; selected: boolean; onSelect: () => void }) {
@@ -1233,10 +1258,10 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
           return <i key={index} className={date.getDay() === 0 || date.getDay() === 6 ? "weekend" : ""} />;
         })}</div>
         {month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth() && <span className="today-line" style={{ left: `${((today.getDate() - 0.5) / daysCount) * 100}%` }} />}
-        {item.phases.map((phase, index) => {
+        {item.phases.map((phase) => {
           const style = position(phase);
           if (!style) return null;
-          return <span key={phase.id} className={`phase-bar ${phase.type.toLowerCase()}`} style={{ ...style, top: `${13 + index * 13}px` }} title={`${phaseMeta[phase.type].label} ${phase.start} ~ ${phase.end}`}><i style={{ width: `${phase.progress}%` }} /><em>{phaseMeta[phase.type].short}</em></span>;
+          return <span key={phase.id} className={`phase-bar ${phase.type.toLowerCase()}`} style={style} title={`${phaseMeta[phase.type].label} ${phase.start} ~ ${phase.end}`}><i style={{ width: `${phase.progress}%` }} /><em>{phaseMeta[phase.type].short}</em></span>;
         })}
         {item.deploymentDate && (() => {
           const deployment = new Date(`${item.deploymentDate}T00:00:00`);
