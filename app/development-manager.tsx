@@ -100,6 +100,7 @@ function scheduleBounds(item: Development) {
 function findScheduleConflicts(candidate: Development, items: Development[]) {
   const candidateRange = scheduleBounds(candidate);
   return items.filter((item) => {
+    if (item.id === candidate.id) return false;
     const range = scheduleBounds(item);
     return Boolean(
       candidateRange.start &&
@@ -116,9 +117,23 @@ function describeDevelopmentChange(before: Development, after: Development) {
   const changes: string[] = [];
   if (before.name !== after.name) changes.push(`개발명: ${before.name} → ${after.name}`);
   if (before.status !== after.status) changes.push(`상태: ${before.status} → ${after.status}`);
+  if (
+    before.customer !== after.customer ||
+    before.region !== after.region ||
+    before.category !== after.category
+  ) {
+    changes.push("기본 정보 수정");
+  }
   if (dateRange(before) !== dateRange(after)) {
     changes.push(`일정: ${dateRange(before)} → ${dateRange(after)}`);
+  } else {
+    const phasePlan = (development: Development) => development.phases
+      .map((phase) => `${phase.type}:${phase.start}:${phase.end}:${phase.md}`)
+      .sort()
+      .join("|");
+    if (phasePlan(before) !== phasePlan(after)) changes.push("단계별 일정·공수 수정");
   }
+  if (before.deploymentDate !== after.deploymentDate) changes.push("배포 예정일 수정");
   if (before.assignees.join("|") !== after.assignees.join("|")) {
     changes.push(`담당자: ${after.assignees.join(", ") || "미지정"}`);
   }
@@ -228,6 +243,7 @@ export default function DevelopmentManager() {
   const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [editingDevelopment, setEditingDevelopment] = useState<Development | null>(null);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -922,7 +938,7 @@ export default function DevelopmentManager() {
               )}
             </div>
             {activeView === "dashboard" ? (
-              <button className="primary-button" onClick={() => setShowForm(true)}><span>＋</span> 개발 등록</button>
+              <button className="primary-button" onClick={() => { setEditingDevelopment(null); setShowForm(true); }}><span>＋</span> 개발 등록</button>
             ) : (
               <button className="primary-button" onClick={() => setShowPriorityPicker(true)}><span>＋</span> 우선순위 추가</button>
             )}
@@ -1010,9 +1026,22 @@ export default function DevelopmentManager() {
       </section>
 
       {selected && (
-        <DetailPanel item={selected} onClose={() => setSelectedId(null)} onStatusChange={quickStatusChange} onDelete={deleteDevelopment} onMessage={showMessage} />
+        <DetailPanel
+          item={selected}
+          onClose={() => setSelectedId(null)}
+          onStatusChange={quickStatusChange}
+          onDelete={deleteDevelopment}
+          onEdit={() => { setEditingDevelopment(selected); setShowForm(true); }}
+        />
       )}
-      {showForm && <DevelopmentForm items={items} onClose={() => setShowForm(false)} onSave={saveDevelopment} />}
+      {showForm && (
+        <DevelopmentForm
+          item={editingDevelopment}
+          items={items}
+          onClose={() => { setShowForm(false); setEditingDevelopment(null); }}
+          onSave={saveDevelopment}
+        />
+      )}
       {showPriorityPicker && (
         <PriorityPicker
           items={priorityCandidates}
@@ -1273,7 +1302,7 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
   );
 }
 
-function DetailPanel({ item, onClose, onStatusChange, onDelete, onMessage }: { item: Development; onClose: () => void; onStatusChange: (status: DevelopmentStatus) => void; onDelete: (item: Development) => void; onMessage: (message: string) => void }) {
+function DetailPanel({ item, onClose, onStatusChange, onDelete, onEdit }: { item: Development; onClose: () => void; onStatusChange: (status: DevelopmentStatus) => void; onDelete: (item: Development) => void; onEdit: () => void }) {
   const progress = weightedProgress(item);
   return (
     <aside className="detail-panel" aria-label="개발 상세">
@@ -1302,41 +1331,103 @@ function DetailPanel({ item, onClose, onStatusChange, onDelete, onMessage }: { i
           <div className="phase-list">{item.phases.map((phase) => <article key={phase.id}><span className={`phase-chip ${phase.type.toLowerCase()}`}>{phaseMeta[phase.type].label}</span><div><strong>{formatShortDate(phase.start)} ~ {formatShortDate(phase.end)}</strong><small>{phase.md} MD</small></div><em>{phase.progress}%</em></article>)}</div>
         </section>
       </div>
-      <div className="detail-actions"><button className="danger" onClick={() => onDelete(item)}>삭제</button><button onClick={() => onMessage("수정 폼은 개발 등록 폼과 통합 예정입니다.")}>수정</button><button className="solid" onClick={() => onMessage("상세 변경사항을 저장했습니다.")}>저장</button></div>
+      <div className="detail-actions"><button className="danger" onClick={() => onDelete(item)}>삭제</button><button className="solid" onClick={onEdit}>수정</button></div>
     </aside>
   );
 }
 
-function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onClose: () => void; onSave: (item: Development) => Promise<boolean> }) {
+function DevelopmentForm({ item, items, onClose, onSave }: { item: Development | null; items: Development[]; onClose: () => void; onSave: (item: Development) => Promise<boolean> }) {
   const [saving, setSaving] = useState(false);
   const [scheduleConflicts, setScheduleConflicts] = useState<Development[]>([]);
   const [pendingDevelopment, setPendingDevelopment] = useState<Development | null>(null);
+  const [formError, setFormError] = useState("");
   const [form, setForm] = useState(() => {
     const start = localDate(new Date());
     const end = addDays(start, 11);
-    return { name: "", customer: "사업팀", region: "", category: "프로젝트" as Development["category"], assignee: "담당자", summary: "", requirements: "", start, end, businessMd: 2, developmentMd: 8, qaMd: 3, deploymentDate: addDays(end, 3) };
+    const business = item?.phases.find((phase) => phase.type === "BUSINESS");
+    const development = item?.phases.find((phase) => phase.type === "DEVELOPMENT");
+    const qa = item?.phases.find((phase) => phase.type === "QA");
+    return {
+      name: item?.name ?? "",
+      customer: item?.customer ?? "사업팀",
+      region: item?.region ?? "",
+      category: item?.category ?? "프로젝트" as Development["category"],
+      assignee: item?.assignees.join(", ") ?? "담당자",
+      summary: item?.summary ?? "",
+      requirements: item?.requirements ?? "",
+      businessStart: business?.start ?? (item ? "" : start),
+      businessEnd: business?.end ?? (item ? "" : addDays(start, 2)),
+      businessMd: business?.md ?? (item ? 0 : 2),
+      developmentStart: development?.start ?? (item ? "" : addDays(start, 3)),
+      developmentEnd: development?.end ?? (item ? "" : addDays(end, -3)),
+      developmentMd: development?.md ?? (item ? 0 : 8),
+      qaStart: qa?.start ?? (item ? "" : addDays(end, -2)),
+      qaEnd: qa?.end ?? (item ? "" : end),
+      qaMd: qa?.md ?? (item ? 0 : 3),
+      deploymentDate: item?.deploymentDate ?? (item ? "" : addDays(end, 3)),
+    };
   });
+
+  const buildDevelopment = () => {
+    const phases: Phase[] = [];
+    const phaseInputs: Array<{ type: Exclude<PhaseType, "DEPLOY">; label: string; start: string; end: string; md: number }> = [
+      { type: "BUSINESS", label: "사업", start: form.businessStart, end: form.businessEnd, md: Number(form.businessMd) },
+      { type: "DEVELOPMENT", label: "개발", start: form.developmentStart, end: form.developmentEnd, md: Number(form.developmentMd) },
+      { type: "QA", label: "품질", start: form.qaStart, end: form.qaEnd, md: Number(form.qaMd) },
+    ];
+
+    for (const phaseInput of phaseInputs) {
+      if (!phaseInput.start && !phaseInput.end) continue;
+      if (!phaseInput.start || !phaseInput.end) {
+        setFormError(`${phaseInput.label} 일정의 시작일과 종료일을 모두 입력해주세요.`);
+        return null;
+      }
+      if (phaseInput.start > phaseInput.end) {
+        setFormError(`${phaseInput.label} 일정의 종료일은 시작일보다 빠를 수 없습니다.`);
+        return null;
+      }
+      const original = item?.phases.find((phase) => phase.type === phaseInput.type);
+      phases.push({
+        id: original?.id ?? uuidv4(),
+        type: phaseInput.type,
+        start: phaseInput.start,
+        end: phaseInput.end,
+        md: Math.max(0, phaseInput.md || 0),
+        progress: original?.progress ?? 0,
+      });
+    }
+
+    const deployPhases = item?.phases.filter((phase) => phase.type === "DEPLOY") ?? [];
+    if (!phases.length && !deployPhases.length) {
+      setFormError("사업·개발·품질 일정 중 하나 이상을 입력해주세요.");
+      return null;
+    }
+
+    setFormError("");
+    const status = item?.status ?? "대기중";
+    return {
+      id: item?.id ?? uuidv4(),
+      code: item?.code ?? createCode(items),
+      name: form.name.trim(),
+      customer: form.customer.trim(),
+      region: form.region.trim(),
+      category: form.category,
+      status,
+      summary: form.summary.trim(),
+      requirements: form.requirements.trim(),
+      assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean),
+      deploymentDate: form.deploymentDate || undefined,
+      phases: phasesForStatus([...phases, ...deployPhases], status),
+      updatedAt: new Date().toISOString(),
+    } satisfies Development;
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.name.trim() || !form.region.trim()) return;
+    const development = buildDevelopment();
+    if (!development) return;
     setSaving(true);
-    const id = uuidv4();
-    const endDate = new Date(`${form.end}T00:00:00`);
-    const startDate = new Date(`${form.start}T00:00:00`);
-    const totalDays = Math.max(7, Math.round((endDate.getTime() - startDate.getTime()) / 86400000));
-    const businessEnd = addDays(form.start, Math.max(1, Math.round(totalDays * 0.15)));
-    const qaStart = addDays(form.end, -Math.max(2, Math.round(totalDays * 0.2)));
-    const development: Development = {
-      id,
-      code: createCode(items),
-      name: form.name.trim(), customer: form.customer.trim(), region: form.region.trim(), category: form.category,
-      status: "대기중", summary: form.summary.trim(), requirements: form.requirements.trim(), assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean), deploymentDate: form.deploymentDate,
-      phases: [
-        { id: uuidv4(), type: "BUSINESS", start: form.start, end: businessEnd, md: Number(form.businessMd), progress: 0 },
-        { id: uuidv4(), type: "DEVELOPMENT", start: addDays(businessEnd, 1), end: addDays(qaStart, -1), md: Number(form.developmentMd), progress: 0 },
-        { id: uuidv4(), type: "QA", start: qaStart, end: form.end, md: Number(form.qaMd), progress: 0 },
-      ], updatedAt: new Date().toISOString(),
-    };
     const conflicts = findScheduleConflicts(development, items);
     if (conflicts.length) {
       setPendingDevelopment(development);
@@ -1354,10 +1445,11 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
     setSaving(false);
   };
   const set = (key: keyof typeof form, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
+  const isEditing = Boolean(item);
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form className="development-form" onSubmit={submit}>
-        <header><div><span>NEW DEVELOPMENT</span><h2>새 개발 건 등록</h2><p>기본정보와 단계별 일정·공수를 입력합니다.</p></div><button type="button" onClick={onClose}>×</button></header>
+        <header><div><span>{isEditing ? `EDIT DEVELOPMENT · ${item?.code}` : "NEW DEVELOPMENT"}</span><h2>{isEditing ? "개발업무 수정" : "새 개발 건 등록"}</h2><p>기본정보와 단계별 일정·공수를 입력합니다.</p></div><button type="button" onClick={onClose}>×</button></header>
         <div className="form-scroll">
           <fieldset><legend>기본 정보</legend><div className="form-grid">
             <label className="wide">개발명 <input autoFocus required value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="예: 부산 승하차단말기 8BIN 적용" /></label>
@@ -1368,16 +1460,25 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
             <label className="wide">개발 요약 <textarea value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={3} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
             <label className="wide">필요사항 <textarea value={form.requirements} onChange={(e) => set("requirements", e.target.value)} rows={2} placeholder="고객사 회신, 샘플 장비 등 선행 필요사항" /></label>
           </div></fieldset>
-          <fieldset><legend>일정 및 공수</legend><div className="form-grid">
-            <label>전체 시작일 <input type="date" value={form.start} onChange={(e) => set("start", e.target.value)} /></label>
-            <label>전체 종료일 <input type="date" min={form.start} value={form.end} onChange={(e) => set("end", e.target.value)} /></label>
-            <label>사업 공수 (MD) <input type="number" min="0" step="0.5" value={form.businessMd} onChange={(e) => set("businessMd", Number(e.target.value))} /></label>
-            <label>개발 공수 (MD) <input type="number" min="0" step="0.5" value={form.developmentMd} onChange={(e) => set("developmentMd", Number(e.target.value))} /></label>
+          <fieldset><legend>사업 일정</legend><div className="form-grid">
+            <label>시작일 <input type="date" value={form.businessStart} onChange={(e) => set("businessStart", e.target.value)} /></label>
+            <label>종료일 <input type="date" min={form.businessStart || undefined} value={form.businessEnd} onChange={(e) => set("businessEnd", e.target.value)} /></label>
+            <label className="wide">공수 (MD) <input type="number" min="0" step="0.5" value={form.businessMd} onChange={(e) => set("businessMd", Number(e.target.value))} /></label>
+          </div></fieldset>
+          <fieldset><legend>개발 일정</legend><div className="form-grid">
+            <label>시작일 <input type="date" value={form.developmentStart} onChange={(e) => set("developmentStart", e.target.value)} /></label>
+            <label>종료일 <input type="date" min={form.developmentStart || undefined} value={form.developmentEnd} onChange={(e) => set("developmentEnd", e.target.value)} /></label>
+            <label className="wide">공수 (MD) <input type="number" min="0" step="0.5" value={form.developmentMd} onChange={(e) => set("developmentMd", Number(e.target.value))} /></label>
+          </div></fieldset>
+          <fieldset><legend>품질 및 배포 일정</legend><div className="form-grid">
+            <label>품질 시작일 <input type="date" value={form.qaStart} onChange={(e) => set("qaStart", e.target.value)} /></label>
+            <label>품질 종료일 <input type="date" min={form.qaStart || undefined} value={form.qaEnd} onChange={(e) => set("qaEnd", e.target.value)} /></label>
             <label>품질 공수 (MD) <input type="number" min="0" step="0.5" value={form.qaMd} onChange={(e) => set("qaMd", Number(e.target.value))} /></label>
             <label>배포 예정일 <input type="date" value={form.deploymentDate} onChange={(e) => set("deploymentDate", e.target.value)} /></label>
           </div></fieldset>
+          {formError && <p className="form-error" role="alert">{formError}</p>}
         </div>
-        <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : "개발 건 등록"}</button></footer>
+        <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : isEditing ? "수정 저장" : "개발 건 등록"}</button></footer>
       </form>
       {pendingDevelopment && scheduleConflicts.length > 0 && (
         <div className="conflict-backdrop">
@@ -1394,7 +1495,7 @@ function DevelopmentForm({ items, onClose, onSave }: { items: Development[]; onC
             </div>
             <footer>
               <button type="button" onClick={() => { setPendingDevelopment(null); setScheduleConflicts([]); }}>일정 다시 확인</button>
-              <button type="button" className="solid warning" disabled={saving} onClick={saveWithConflicts}>{saving ? "등록 중..." : "그래도 등록"}</button>
+              <button type="button" className="solid warning" disabled={saving} onClick={saveWithConflicts}>{saving ? "저장 중..." : isEditing ? "그래도 수정" : "그래도 등록"}</button>
             </footer>
           </section>
         </div>
