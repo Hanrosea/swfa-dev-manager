@@ -67,7 +67,6 @@ type IssueStatus = "등록" | "처리중" | "해결" | "보류";
 
 type Issue = {
   id: string;
-  developmentId: string;
   title: string;
   content: string;
   severity: IssueSeverity;
@@ -366,7 +365,7 @@ export default function DevelopmentManager() {
             .order("sort_order", { ascending: true }),
           supabase
             .from("issues")
-            .select("id, development_id, title, content, severity, status, due_date, created_at, updated_at")
+            .select("id, title, content, severity, status, due_date, created_at, updated_at")
             .order("updated_at", { ascending: false }),
         ]);
         if (!developmentResult.error) {
@@ -385,7 +384,6 @@ export default function DevelopmentManager() {
           if (!issueResult.error) {
             setIssues((issueResult.data ?? []).map((row) => ({
               id: String(row.id),
-              developmentId: String(row.development_id),
               title: String(row.title),
               content: String(row.content ?? ""),
               severity: row.severity as IssueSeverity,
@@ -746,7 +744,6 @@ export default function DevelopmentManager() {
     if (supabase) {
       const { error } = await supabase.from("issues").insert({
         id: issue.id,
-        development_id: issue.developmentId,
         title: issue.title,
         content: issue.content || null,
         severity: issue.severity,
@@ -1115,7 +1112,6 @@ export default function DevelopmentManager() {
         ) : (
           <IssueBoard
             issues={issues}
-            developments={items}
             onAdd={() => setShowIssueForm(true)}
             onRemove={removeIssue}
           />
@@ -1148,7 +1144,6 @@ export default function DevelopmentManager() {
       )}
       {showIssueForm && (
         <IssueForm
-          developments={items}
           onClose={() => setShowIssueForm(false)}
           onSave={saveIssue}
         />
@@ -1283,9 +1278,8 @@ function PriorityBoard({ items, draggingId, onAdd, onDragStart, onDragEnd, onDro
   );
 }
 
-function IssueBoard({ issues, developments, onAdd, onRemove }: {
+function IssueBoard({ issues, onAdd, onRemove }: {
   issues: Issue[];
-  developments: Development[];
   onAdd: () => void;
   onRemove: (id: string) => void;
 }) {
@@ -1302,7 +1296,6 @@ function IssueBoard({ issues, developments, onAdd, onRemove }: {
       {issues.length ? (
         <div className="priority-list">
           {issues.map((issue, index) => {
-            const development = developments.find((item) => item.id === issue.developmentId);
             return (
               <article key={issue.id} className="priority-card issue-card">
                 <span className="priority-rank issue-rank">{index + 1}</span>
@@ -1311,14 +1304,12 @@ function IssueBoard({ issues, developments, onAdd, onRemove }: {
                   <div className="priority-card-title">
                     <div>
                       <strong>{issue.title}</strong>
-                      <small>{development ? `${development.code} · ${development.name} · ${development.customer}` : "연결된 개발업무 없음"}</small>
                     </div>
                     <span className={`issue-status issue-status-${issue.status}`}>{issue.status}</span>
                   </div>
                   {issue.content && <p className="issue-content">{issue.content}</p>}
                   <dl>
                     <div><dt>중요도</dt><dd className={`issue-severity issue-severity-${issue.severity}`}>{issue.severity}</dd></div>
-                    <div><dt>담당자</dt><dd>{development?.assignees.join(" · ") || "미지정"}</dd></div>
                     <div><dt>완료 예정</dt><dd>{issue.dueDate ?? "미정"}</dd></div>
                   </dl>
                 </div>
@@ -1341,12 +1332,10 @@ function IssueBoard({ issues, developments, onAdd, onRemove }: {
   );
 }
 
-function IssueForm({ developments, onClose, onSave }: {
-  developments: Development[];
+function IssueForm({onClose, onSave }: {
   onClose: () => void;
   onSave: (issue: Issue) => Promise<boolean>;
 }) {
-  const [developmentId, setDevelopmentId] = useState(developments[0]?.id ?? "");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [severity, setSeverity] = useState<IssueSeverity>("보통");
@@ -1356,12 +1345,11 @@ function IssueForm({ developments, onClose, onSave }: {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!developmentId || !title.trim()) return;
+    if (!title.trim()) return;
     setSaving(true);
     const now = new Date().toISOString();
     await onSave({
       id: uuidv4(),
-      developmentId,
       title: title.trim(),
       content: content.trim(),
       severity,
@@ -1381,7 +1369,6 @@ function IssueForm({ developments, onClose, onSave }: {
           <button type="button" onClick={onClose} aria-label="팝업 닫기">×</button>
         </header>
         <div className="issue-form-fields">
-          <label className="wide"><span>개발업무</span><select value={developmentId} onChange={(event) => setDevelopmentId(event.target.value)} required><option value="">개발업무 선택</option>{developments.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
           <label className="wide"><span>이슈 제목</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="이슈 제목을 입력하세요" required /></label>
           <label className="wide"><span>상세 내용</span><textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="현상, 영향도, 대응내용 등을 입력하세요" rows={4} /></label>
           <label><span>중요도</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IssueSeverity)}>{(["긴급", "높음", "보통", "낮음"] as IssueSeverity[]).map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -1390,7 +1377,7 @@ function IssueForm({ developments, onClose, onSave }: {
         </div>
         <footer>
           <button type="button" onClick={onClose}>취소</button>
-          <button className="solid" disabled={!developmentId || !title.trim() || saving}>{saving ? "저장 중..." : "등록"}</button>
+          <button className="solid" disabled={!title.trim() || saving}>{saving ? "저장 중..." : "등록"}</button>
         </footer>
       </form>
     </div>

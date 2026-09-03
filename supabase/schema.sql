@@ -45,7 +45,7 @@ create table if not exists public.qa_priorities (
 
 create table if not exists public.issues (
   id uuid primary key default gen_random_uuid(),
-  development_id uuid not null references public.developments(id) on delete cascade,
+  development_id uuid references public.developments(id) on delete cascade,
   title text not null,
   content text,
   severity text not null default '보통' check (severity in ('긴급', '높음', '보통', '낮음')),
