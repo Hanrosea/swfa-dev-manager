@@ -15,6 +15,7 @@ import type {
 
 const STORAGE_KEY = "mybi-infra-dev-manager-v1";
 const PRIORITY_STORAGE_KEY = "mybi-infra-qa-priority-v1";
+const ISSUE_STORAGE_KEY = "mybi-infra-issues-v1";
 const NOTIFICATION_STORAGE_KEY = "mybi-infra-notifications-v1";
 const READ_NOTIFICATION_STORAGE_KEY = "mybi-infra-read-notifications-v1";
 const notificationActions: NotificationAction[] = [
@@ -58,7 +59,23 @@ const menuItems = [
   { id: "dashboard", label: "일정 대시보드", icon: "▦" },
   { id: "developments", label: "전체 개발", icon: "≡" },
   { id: "priority", label: "우선 순위", icon: "↕" },
+  { id: "issues", label: "이슈사항", icon: "!" },
 ] as const;
+
+type IssueSeverity = "긴급" | "높음" | "보통" | "낮음";
+type IssueStatus = "등록" | "처리중" | "해결" | "보류";
+
+type Issue = {
+  id: string;
+  developmentId: string;
+  title: string;
+  content: string;
+  severity: IssueSeverity;
+  status: IssueStatus;
+  dueDate?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 function localDate(date: Date) {
   const year = date.getFullYear();
@@ -248,10 +265,12 @@ export default function DevelopmentManager() {
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"dashboard" | "priority">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "priority" | "issues">("dashboard");
   const [priorityIds, setPriorityIds] = useState<string[]>([]);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [draggingPriorityId, setDraggingPriorityId] = useState<string | null>(null);
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [showIssueForm, setShowIssueForm] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -291,6 +310,7 @@ export default function DevelopmentManager() {
     if (!supabase) {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       const savedPriorities = window.localStorage.getItem(PRIORITY_STORAGE_KEY);
+      const savedIssues = window.localStorage.getItem(ISSUE_STORAGE_KEY);
       let loadedItems = initialDevelopments;
       if (saved) {
         try {
@@ -316,6 +336,14 @@ export default function DevelopmentManager() {
           window.localStorage.removeItem(PRIORITY_STORAGE_KEY);
         }
       }
+      if (savedIssues) {
+        try {
+          const parsed = JSON.parse(savedIssues) as Issue[];
+          if (Array.isArray(parsed)) queueMicrotask(() => setIssues(parsed));
+        } catch {
+          window.localStorage.removeItem(ISSUE_STORAGE_KEY);
+        }
+      }
       return;
     }
 
@@ -326,7 +354,7 @@ export default function DevelopmentManager() {
       setUserEmail(sessionData.session?.user.email ?? null);
       setUserId(sessionData.session?.user.id ?? null);
       if (sessionData.session) {
-        const [developmentResult, priorityResult] = await Promise.all([
+        const [developmentResult, priorityResult, issueResult] = await Promise.all([
           supabase
             .from("developments")
             .select("*, development_phases(*)")
@@ -336,6 +364,10 @@ export default function DevelopmentManager() {
             .from("qa_priorities")
             .select("development_id, sort_order")
             .order("sort_order", { ascending: true }),
+          supabase
+            .from("issues")
+            .select("id, development_id, title, content, severity, status, due_date, created_at, updated_at")
+            .order("updated_at", { ascending: false }),
         ]);
         if (!developmentResult.error) {
           const loadedItems = (developmentResult.data ?? []).map(mapDatabaseRow);
@@ -349,6 +381,19 @@ export default function DevelopmentManager() {
                 .map((row) => String(row.development_id))
                 .filter((id) => qualityIds.has(id)),
             );
+          }
+          if (!issueResult.error) {
+            setIssues((issueResult.data ?? []).map((row) => ({
+              id: String(row.id),
+              developmentId: String(row.development_id),
+              title: String(row.title),
+              content: String(row.content ?? ""),
+              severity: row.severity as IssueSeverity,
+              status: row.status as IssueStatus,
+              dueDate: row.due_date ? String(row.due_date) : undefined,
+              createdAt: String(row.created_at),
+              updatedAt: String(row.updated_at),
+            })));
           }
         }
       }
@@ -376,6 +421,12 @@ export default function DevelopmentManager() {
       window.localStorage.setItem(PRIORITY_STORAGE_KEY, JSON.stringify(priorityIds));
     }
   }, [priorityIds]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      window.localStorage.setItem(ISSUE_STORAGE_KEY, JSON.stringify(issues));
+    }
+  }, [issues]);
 
   useEffect(() => {
     try {
@@ -690,6 +741,43 @@ export default function DevelopmentManager() {
     return true;
   };
 
+  const saveIssue = async (issue: Issue) => {
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      const { error } = await supabase.from("issues").insert({
+        id: issue.id,
+        development_id: issue.developmentId,
+        title: issue.title,
+        content: issue.content || null,
+        severity: issue.severity,
+        status: issue.status,
+        due_date: issue.dueDate || null,
+      });
+      if (error) {
+        showMessage(`이슈사항 저장 실패: ${error.message}`);
+        return false;
+      }
+    }
+    setIssues((current) => [issue, ...current]);
+    setShowIssueForm(false);
+    showMessage("이슈사항을 등록했습니다.");
+    return true;
+  };
+
+  const removeIssue = async (id: string) => {
+    if (!window.confirm("이 이슈사항을 삭제할까요?")) return;
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      const { error } = await supabase.from("issues").delete().eq("id", id);
+      if (error) {
+        showMessage(`이슈사항 삭제 실패: ${error.message}`);
+        return;
+      }
+    }
+    setIssues((current) => current.filter((issue) => issue.id !== id));
+    showMessage("이슈사항을 삭제했습니다.");
+  };
+
   const quickStatusChange = async (status: DevelopmentStatus) => {
     if (!selected) return;
     const saved = await saveDevelopment({
@@ -876,7 +964,7 @@ export default function DevelopmentManager() {
               className={activeView === item.id ? "active" : ""}
               key={item.id}
               onClick={() => {
-                if (item.id === "dashboard" || item.id === "priority") {
+                if (item.id === "dashboard" || item.id === "priority" || item.id === "issues") {
                   setActiveView(item.id);
                   setSelectedId(null);
                   return;
@@ -907,7 +995,7 @@ export default function DevelopmentManager() {
         <header className="topbar">
           <div>
             <p className="eyebrow">차량내디바이스팀</p>
-            <h1>{activeView === "priority" ? "우선 순위" : "개발 일정 대시보드"}</h1>
+            <h1>{activeView === "priority" ? "우선 순위" : activeView === "issues" ? "이슈사항" : "개발 일정 대시보드"}</h1>
           </div>
           <div className="top-actions">
             <span className={`mode-pill ${isSupabaseConfigured ? "db" : "demo"}`}>
@@ -939,8 +1027,10 @@ export default function DevelopmentManager() {
             </div>
             {activeView === "dashboard" ? (
               <button className="primary-button" onClick={() => { setEditingDevelopment(null); setShowForm(true); }}><span>＋</span> 개발 등록</button>
-            ) : (
+            ) : activeView === "priority" ? (
               <button className="primary-button" onClick={() => setShowPriorityPicker(true)}><span>＋</span> 우선순위 추가</button>
+            ) : (
+              <button className="primary-button" onClick={() => setShowIssueForm(true)}><span>＋</span> 이슈사항 추가</button>
             )}
           </div>
         </header>
@@ -1011,7 +1101,7 @@ export default function DevelopmentManager() {
             </div>
           </div>
           </section>
-        </> : (
+        </> : activeView === "priority" ? (
           <PriorityBoard
             items={priorityItems}
             draggingId={draggingPriorityId}
@@ -1021,6 +1111,13 @@ export default function DevelopmentManager() {
             onDrop={dropPriority}
             onMove={movePriority}
             onRemove={removePriority}
+          />
+        ) : (
+          <IssueBoard
+            issues={issues}
+            developments={items}
+            onAdd={() => setShowIssueForm(true)}
+            onRemove={removeIssue}
           />
         )}
       </section>
@@ -1047,6 +1144,13 @@ export default function DevelopmentManager() {
           items={priorityCandidates}
           onClose={() => setShowPriorityPicker(false)}
           onConfirm={addPriorityItems}
+        />
+      )}
+      {showIssueForm && (
+        <IssueForm
+          developments={items}
+          onClose={() => setShowIssueForm(false)}
+          onSave={saveIssue}
         />
       )}
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
@@ -1176,6 +1280,120 @@ function PriorityBoard({ items, draggingId, onAdd, onDragStart, onDragEnd, onDro
         </div>
       )}
     </section>
+  );
+}
+
+function IssueBoard({ issues, developments, onAdd, onRemove }: {
+  issues: Issue[];
+  developments: Development[];
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <section className="priority-board" aria-labelledby="issue-title">
+      <header className="priority-board-head issue-board-head">
+        <div>
+          <p>ISSUE MANAGEMENT</p>
+          <h2 id="issue-title">이슈사항</h2>
+          <small>개발업무별 주요 이슈와 처리상태를 관리합니다.</small>
+        </div>
+        <span>총 {issues.length}건</span>
+      </header>
+      {issues.length ? (
+        <div className="priority-list">
+          {issues.map((issue, index) => {
+            const development = developments.find((item) => item.id === issue.developmentId);
+            return (
+              <article key={issue.id} className="priority-card issue-card">
+                <span className="priority-rank issue-rank">{index + 1}</span>
+                <span className="drag-handle issue-mark" aria-hidden="true">!</span>
+                <div className="priority-card-body">
+                  <div className="priority-card-title">
+                    <div>
+                      <strong>{issue.title}</strong>
+                      <small>{development ? `${development.code} · ${development.name} · ${development.customer}` : "연결된 개발업무 없음"}</small>
+                    </div>
+                    <span className={`issue-status issue-status-${issue.status}`}>{issue.status}</span>
+                  </div>
+                  {issue.content && <p className="issue-content">{issue.content}</p>}
+                  <dl>
+                    <div><dt>중요도</dt><dd className={`issue-severity issue-severity-${issue.severity}`}>{issue.severity}</dd></div>
+                    <div><dt>담당자</dt><dd>{development?.assignees.join(" · ") || "미지정"}</dd></div>
+                    <div><dt>완료 예정</dt><dd>{issue.dueDate ?? "미정"}</dd></div>
+                  </dl>
+                </div>
+                <div className="priority-card-actions issue-card-actions">
+                  <button className="remove" onClick={() => onRemove(issue.id)} aria-label={`${issue.title} 삭제`}>×</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="priority-empty issue-empty">
+          <span aria-hidden="true">!</span>
+          <strong>등록된 이슈사항이 없습니다.</strong>
+          <small>‘이슈사항 추가’를 눌러 개발업무의 주요 이슈를 등록하세요.</small>
+          <button className="primary-button" onClick={onAdd}><span>＋</span> 이슈사항 추가</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function IssueForm({ developments, onClose, onSave }: {
+  developments: Development[];
+  onClose: () => void;
+  onSave: (issue: Issue) => Promise<boolean>;
+}) {
+  const [developmentId, setDevelopmentId] = useState(developments[0]?.id ?? "");
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [severity, setSeverity] = useState<IssueSeverity>("보통");
+  const [status, setStatus] = useState<IssueStatus>("등록");
+  const [dueDate, setDueDate] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!developmentId || !title.trim()) return;
+    setSaving(true);
+    const now = new Date().toISOString();
+    await onSave({
+      id: uuidv4(),
+      developmentId,
+      title: title.trim(),
+      content: content.trim(),
+      severity,
+      status,
+      dueDate: dueDate || undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+    setSaving(false);
+  };
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form className="priority-picker issue-form" onSubmit={submit}>
+        <header>
+          <div><span>ADD ISSUE</span><h2>이슈사항 추가</h2><p>개발업무와 연결하여 주요 이슈 및 처리상태를 등록합니다.</p></div>
+          <button type="button" onClick={onClose} aria-label="팝업 닫기">×</button>
+        </header>
+        <div className="issue-form-fields">
+          <label className="wide"><span>개발업무</span><select value={developmentId} onChange={(event) => setDevelopmentId(event.target.value)} required><option value="">개발업무 선택</option>{developments.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
+          <label className="wide"><span>이슈 제목</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="이슈 제목을 입력하세요" required /></label>
+          <label className="wide"><span>상세 내용</span><textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="현상, 영향도, 대응내용 등을 입력하세요" rows={4} /></label>
+          <label><span>중요도</span><select value={severity} onChange={(event) => setSeverity(event.target.value as IssueSeverity)}>{(["긴급", "높음", "보통", "낮음"] as IssueSeverity[]).map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label><span>처리상태</span><select value={status} onChange={(event) => setStatus(event.target.value as IssueStatus)}>{(["등록", "처리중", "해결", "보류"] as IssueStatus[]).map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label className="wide"><span>완료 예정일</span><input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
+        </div>
+        <footer>
+          <button type="button" onClick={onClose}>취소</button>
+          <button className="solid" disabled={!developmentId || !title.trim() || saving}>{saving ? "저장 중..." : "등록"}</button>
+        </footer>
+      </form>
+    </div>
   );
 }
 
