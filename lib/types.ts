@@ -15,6 +15,28 @@ export interface Phase {
   progress: number;
 }
 
+export const firmwareKinds = ["운전자", "승하차", "운영정보"] as const;
+export interface Firmware {
+  id: string;
+  region: string;
+  kind: (typeof firmwareKinds)[number] | "";
+  version: string;
+  devStart: string;
+  devEnd: string;
+  qaStart: string;
+  qaEnd: string;
+  status: DevelopmentStatus;
+}
+
+export const effortLabels = {
+  management: "사업 총괄",
+  design: "분석 및 설계",
+  development: "개발",
+  quality: "품질 테스트",
+  execution: "사업 수행",
+} as const;
+export type Effort = Record<keyof typeof effortLabels, number>;
+
 export interface Development {
   id: string;
   code: string;
@@ -27,7 +49,9 @@ export interface Development {
   requirements: string;
   assignees: string[];
   deploymentDate?: string;
-  phases: Phase[];
+  phases: Phase[]; // Original phase records retained for historical reference.
+  firmware: Firmware[];
+  effort: Effort;
   updatedAt: string;
 }
 
