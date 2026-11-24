@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 :root {
+  --item-font: 15px;
+  --body-font: 13px;
+  --meta-font: 12px;
   --ink: #152033;
   --muted: #6f7c91;
   --line: #e2e7ef;
@@ -239,9 +242,9 @@ button { color: inherit; }
 }
 .fw-priority-summary > div { min-width: 0; display: grid; align-content: center; gap: 6px; padding: 0 14px; overflow-wrap: anywhere; }
 .fw-priority-summary > div + div { border-left: 1px solid #dce3ed; }
-.fw-priority-summary strong, .fw-picker .fw-priority-summary strong { font-size: 12px; color: #27374c; line-height: 1.3; }
-.fw-priority-summary small, .fw-picker .fw-priority-summary small { margin: 0; color: #53657c; font-size: 9px; line-height: 1.45; }
-.fw-priority-summary > div > span { color: #53657c; font-size: 8px; font-weight: 700; }
+.fw-priority-summary strong, .fw-picker .fw-priority-summary strong { font-size: var(--item-font); color: #27374c; line-height: 1.3; }
+.fw-priority-summary small, .fw-picker .fw-priority-summary small { margin: 0; color: #53657c; font-size: var(--meta-font); line-height: 1.45; }
+.fw-priority-summary > div > span { color: #53657c; font-size: var(--item-font); font-weight: 700; }
 .fw-picker { width: min(1260px, 100%); min-width: 0; }
 .fw-picker .priority-picker-list label { grid-template-columns: 22px minmax(0,1fr); }
 .fw-picker .priority-picker-list label:focus-within { outline: 2px solid #6792d6; outline-offset: -2px; }
@@ -259,7 +262,7 @@ button { color: inherit; }
 /* Project sheets use the content area beside the navigation. */
 .project-editor-backdrop { position: fixed; z-index: 60; inset: 0 0 0 var(--sidebar-width); background: white; }
 .project-editor-backdrop .development-form { width: 100%; height: 100%; max-height: none; border-radius: 0; box-shadow: none; }
-.project-progress { display: flex; align-items: center; gap: 16px; flex: none; padding: 14px clamp(18px, 2vw, 34px); border-block: 1px solid #e0e6ef; background: #f7f9fc; color: #334967; font-size: 20px; }
+.project-progress { display: flex; align-items: center; gap: 16px; flex: none; padding: 14px clamp(18px, 2vw, 34px); border-block: 1px solid #e0e6ef; background: #f7f9fc; color: #334967; font-size: var(--item-font); }
 .project-progress strong { color: #2865d1; min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
 .project-progress progress, .timeline-percent progress { accent-color: #3974d5; height: 8px; min-width: 0; }
 .project-progress progress { flex: 1; }
@@ -267,46 +270,47 @@ button { color: inherit; }
 .project-columns .project-basics { min-width: 0; border: 0; border-right: 1px solid #dbe2eb; }
 .project-main { min-width: 0; }
 .detail-panel .project-basics, .project-main .detail-section { padding: 22px clamp(16px, 2vw, 34px); }
-.detail-panel .detail-head h2 { max-width: none; font-size: 25.5px; }
-.detail-code { font-size: 13.5px; }
-.detail-panel .detail-section h3 { font-size: 24px; }
-.detail-panel :is(.detail-grid dt, h3 small, .fw-details .status-badge) { font-size: 18px; }
-.detail-panel :is(.detail-grid dd, .body-copy, .requirement-copy) { font-size: 21px; white-space: pre-line; }
-.project-basics .detail-grid { gap: 16px; }
+.detail-panel .detail-head h2 { max-width: none; font-size: var(--item-font); }
+.detail-code { font-size: var(--meta-font); }
+.detail-panel .detail-section h3 { font-size: 17px; }
+.detail-panel :is(.detail-grid dt, h3 small, .fw-details .status-badge) { font-size: var(--meta-font); }
+.detail-panel :is(.detail-grid dd, .body-copy, .requirement-copy) { font-size: var(--body-font); white-space: pre-line; }
+.project-basics .detail-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .project-editor-backdrop .form-scroll { padding: 0; }
 .project-editor-backdrop .project-basics { margin: 0; padding: 0 18px 22px; }
 .project-editor-backdrop .project-basics > legend { padding-top: 18px; }
 .project-editor-backdrop .project-basics .form-grid { grid-template-columns: 1fr; }
 .project-editor-backdrop .project-main { padding: 18px clamp(16px,2vw,32px) 24px; }
 .development-form .project-description { grid-template-columns: 1fr; }
-.development-form h2 { font-size: 40.5px; }
-.development-form header span, .form-grid label > small { font-size: 18px; }
-.development-form header p, .development-form footer button, .form-grid :is(input, select, textarea), .fw-editor :is(input,select), .effort-fields input { font-size: 22.5px; }
-.development-form legend { font-size: 24.75px; }
-.development-form legend small { font-size: 19.5px; }
-.form-grid label { font-size: 20.25px; }
-.fw-table, .effort-fields label > span, .effort-fields strong { font-size: 21px; }
+.development-form h2 { font-size: 22px; }
+.development-form header span, .form-grid label > small { font-size: var(--meta-font); }
+.development-form header p, .development-form footer button, .form-grid :is(input, select, textarea), .fw-editor :is(input,select), .effort-fields input { font-size: var(--item-font); }
+.development-form legend { font-size: 17px; }
+.development-form legend small { font-size: var(--meta-font); }
+.form-grid label { font-size: var(--body-font); }
+.fw-table, .effort-fields label > span, .effort-fields strong { font-size: var(--body-font); }
 .fw-table :is(input, select), .effort-fields input, .form-grid :is(input, select) { height: 45px; }
-.fw-dates label span, .effort-fields small { font-size: 18px; }
+.fw-dates label span, .effort-fields small { font-size: var(--meta-font); }
 .fw-editor { min-width: 1240px; }
 .fw-editor :is(th, td):last-child { position: sticky; right: 0; background: white; box-shadow: -1px 0 #dce3eb; }
 .fw-editor thead th:last-child { background: #f3f6fa; }
 .fw-details { min-width: 820px; }
-.detail-panel .detail-actions button { font-size: 21px; }
+.detail-panel .detail-actions button { font-size: var(--body-font); }
 .detail-panel > .detail-head, .development-form > :is(header,footer) { flex: none; }
 .development-form footer button { height: 46px; }
-.development-form .form-error { font-size: 22.5px; }
+.development-form .form-error { font-size: var(--item-font); }
 .effort-fields { grid-template-columns: repeat(auto-fit, minmax(min(150px,100%),1fr)); }
 
-/* The dashboard scales independently of the priority and issue boards. */
+/* Dashboard typography and timeline layout. */
 .dashboard-workspace { min-width: 0; --calendar-info: clamp(430px, 35vw, 660px); }
-.dashboard-workspace .topbar h1 { font-size: 31.5px; }
-.dashboard-workspace :is(.eyebrow,.stat-card small,.legend-row,.view-switch button,.multi-filter-menu em,.sticky-info,.day-heads span) { font-size: 15px; }
-.dashboard-workspace :is(.mode-pill,.stat-card p,.search-box input,.multi-filter summary,.export-button,.today-button,.task-title strong) { font-size: 16.5px; }
-.dashboard-workspace :is(.primary-button,.empty-row) { font-size: 18px; }
-.dashboard-workspace .stat-card strong { font-size: 34.5px; }
-.dashboard-workspace .month-control strong { font-size: 22.5px; }
-.dashboard-workspace .task-title small { font-size: 13.5px; }
+.dashboard-workspace .topbar h1 { font-size: 24px; line-height: 1.3; }
+.dashboard-workspace :is(.eyebrow,.stat-card small,.legend-row,.view-switch button,.multi-filter-menu em,.sticky-info,.day-heads span) { font-size: var(--meta-font); }
+.dashboard-workspace :is(.mode-pill,.stat-card p,.search-box input,.multi-filter summary,.export-button,.today-button) { font-size: var(--body-font); }
+.dashboard-workspace .task-title strong { font-size: var(--item-font); }
+.dashboard-workspace :is(.primary-button,.empty-row) { font-size: var(--body-font); }
+.dashboard-workspace .stat-card strong { font-size: 26px; }
+.dashboard-workspace .month-control strong { font-size: 18px; }
+.dashboard-workspace .task-title small { font-size: var(--meta-font); }
 .dashboard-workspace :is(.day-heads span small,.mini-avatars i) { font-size: 12px; }
 .dashboard-workspace .day-heads span.today:after, .dashboard-workspace .phase-bar em { font-size: 10.5px; }
 .dashboard-workspace .deploy-marker { font-size: 13.5px; }
@@ -329,9 +333,55 @@ button { color: inherit; }
   .project-columns .project-basics { border-right: 0; border-bottom: 1px solid #dbe2eb; }
   .dashboard-workspace { --calendar-info: min(67vw, 380px); }
   .dashboard-workspace .topbar { gap: 8px; flex-wrap: wrap; padding-block: 8px; }
-  .dashboard-workspace .topbar h1 { font-size: 25.5px; }
-  .dashboard-workspace .stat-card strong { font-size: 28.5px; }
+  .dashboard-workspace .topbar h1 { font-size: 21px; }
+  .dashboard-workspace .stat-card strong { font-size: 22px; }
   .dashboard-workspace :is(.sticky-info,.task-info) { grid-template-columns: minmax(0,1fr) 69px; padding-inline: 6px; gap: 4px; }
   .dashboard-workspace .task-meta { grid-template-columns: 1fr; gap: 1px; }
   .project-editor-backdrop .development-form > footer { padding-bottom: max(44px, env(safe-area-inset-bottom)); }
+}
+
+@media (min-width: 1051px) {
+  .app-shell { --heading-top: 19px; }
+  .brand > div, .dashboard-workspace .topbar > div:first-child {
+    align-self: flex-start;
+    padding-top: var(--heading-top);
+  }
+  .brand strong, .dashboard-workspace .eyebrow { font-size: var(--item-font); line-height: 20px; }
+  .dashboard-workspace .topbar { padding-bottom: 8px; }
+}
+.priority-board-head small, .priority-board-head > span, .priority-card dt,
+.issue-status, .issue-form-fields label > span { font-size: var(--meta-font); }
+.priority-card dd, .issue-content, .priority-picker footer button { font-size: var(--body-font); }
+.issue-card { position: relative; }
+.issue-open {
+  display: block; max-width: 100%; padding: 0; border: 0; background: transparent;
+  color: #2f3d51; font-size: var(--item-font); font-weight: 700; text-align: left;
+  overflow-wrap: anywhere; cursor: pointer;
+}
+.issue-open::after { content: ""; position: absolute; inset: 0; border-radius: 9px; }
+.issue-open:focus-visible::after { outline: 2px solid var(--blue); }
+.issue-card-actions button { position: relative; z-index: 1; }
+.issue-content, .issue-detail .body-copy { overflow-wrap: anywhere; }
+.issue-form-fields :is(input, select, textarea) { font-size: var(--item-font); }
+.issue-basics { grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 12px; }
+.activity-form { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: end; gap: 10px; margin-bottom: 16px; }
+.activity-form label { display: grid; gap: 5px; color: #536176; font-size: var(--meta-font); font-weight: 700; }
+.activity-form :is(input, textarea) {
+  width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+  color: var(--ink); font: inherit; font-size: var(--body-font); font-weight: 400;
+}
+.activity-form textarea { resize: vertical; }
+.activity-form button:disabled { opacity: .55; cursor: default; }
+.issue-history > p { font-size: var(--body-font); }
+.activity-table { width: 100%; border-collapse: collapse; color: #344157; font-size: var(--body-font); }
+.activity-table :is(th, td) { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.activity-table th { background: #f3f6fa; font-size: var(--meta-font); }
+.activity-table :is(th, td):nth-child(-n+2):not([colspan]) { width: 1%; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.activity-table td:nth-child(3) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-table .activity-empty { padding: 20px; text-align: center; color: var(--muted); }
+@media (max-width: 760px) {
+  .activity-form { grid-template-columns: minmax(0,1fr) auto; }
+  .activity-form label:nth-child(2) { grid-column: 1/-1; grid-row: 2; }
+  .activity-form button { grid-column: 2; grid-row: 1; }
+  .activity-table :is(th, td) { padding-inline: 6px; }
 }
