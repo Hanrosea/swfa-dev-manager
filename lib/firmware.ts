@@ -1,7 +1,8 @@
 import type { Development, Effort, Firmware, Phase, ProjectRowChange, Requirement } from "./types";
+import { deploymentAfterQuality } from "./schedule";
 
 export function emptyFirmware(id: string): Firmware {
-  return { id, region: "", kind: "", version: "", devStart: "", devEnd: "", qaStart: "", qaEnd: "", status: "대기중" };
+  return { id, region: "", kind: "", version: "", designStart: "", designEnd: "", devStart: "", devEnd: "", qaStart: "", qaEnd: "", status: "대기중" };
 }
 
 export function emptyEffort(): Effort {
@@ -23,12 +24,16 @@ export function withRowStatus(project: Development, change: ProjectRowChange): D
   return { ...project, firmware: project.firmware.map(fw => fw.id === change.id ? { ...fw, status: change.status } : fw) };
 }
 
+type StoredFirmware = Omit<Firmware, "designStart" | "designEnd"> & Partial<Pick<Firmware, "designStart" | "designEnd">>;
 export type LegacyDevelopment = Omit<Development, "firmware" | "effort" | "requirements">
-  & Partial<Pick<Development, "firmware" | "effort">> & { requirements?: string | Requirement[] | null };
+  & Partial<Pick<Development, "effort">> & { firmware?: StoredFirmware[]; requirements?: string | Requirement[] | null };
 
 export function upgradeDevelopment(item: LegacyDevelopment): Development {
   const requirements = Array.isArray(item.requirements) ? item.requirements : legacyRequirements(item.id, item.requirements ?? "");
-  if (item.firmware && item.effort) return { ...item, requirements, firmware: item.firmware, effort: item.effort };
+  const storedRows = item.firmware?.map(fw => ({ ...fw, designStart: fw.designStart ?? "", designEnd: fw.designEnd ?? "" }));
+  if (storedRows && item.effort) {
+    return { ...item, requirements, firmware: storedRows, deploymentDate: deploymentAfterQuality(storedRows), effort: item.effort };
+  }
   const phases = item.phases ?? [];
   const firmware = { ...emptyFirmware(item.id), region: item.region, status: item.status };
   const effort = emptyEffort();
@@ -42,30 +47,8 @@ export function upgradeDevelopment(item: LegacyDevelopment): Development {
       if (phase.end > firmware[end]) firmware[end] = phase.end;
     }
   }
-  return { ...item, phases, requirements, firmware: item.firmware ?? [firmware], effort: item.effort ?? effort };
-}
-
-export function scheduledPeriods(item: Development) {
-  const periods: { id: string; type: Phase["type"]; start: string; end: string; label: string; lane: number }[] = [];
-  for (const [index, fw] of item.firmware.entries()) {
-    const label = [fw.region, fw.kind, fw.version || "버전 미지정"].filter(Boolean).join(" · ");
-    if (fw.devStart && fw.devEnd) periods.push({ id: fw.id + "-dev", type: "DEVELOPMENT", start: fw.devStart, end: fw.devEnd, label, lane: index * 2 });
-    if (fw.qaStart && fw.qaEnd) periods.push({ id: fw.id + "-qa", type: "QA", start: fw.qaStart, end: fw.qaEnd, label, lane: index * 2 + 1 });
-  }
-  const isReviewedBusiness = (phase: Phase) => phase.type === "BUSINESS" && phase.memo?.startsWith("검토본 사업기간 · ");
-  const hasReviewedBusiness = item.phases.some(isReviewedBusiness);
-  const byDates = new Map<string, typeof periods[number]>();
-  for (const phase of item.phases) {
-    if (phase.type !== "BUSINESS" && phase.type !== "DEPLOY") continue;
-    if (phase.type === "BUSINESS" && hasReviewedBusiness && !isReviewedBusiness(phase)) continue;
-    const label = phase.memo || "기존 일정";
-    const key = [phase.type, phase.start, phase.end].join("/");
-    const same = byDates.get(key);
-    if (same) same.label += " / " + label;
-    else byDates.set(key, { ...phase, label, lane: item.firmware.length * 2 + byDates.size });
-  }
-  periods.push(...byDates.values());
-  return periods;
+  const rows = storedRows ?? [firmware];
+  return { ...item, phases, requirements, firmware: rows, deploymentDate: deploymentAfterQuality(rows), effort: item.effort ?? effort };
 }
 
 export type PriorityEntry = { project: Development; fw: Firmware };

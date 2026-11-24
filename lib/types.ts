@@ -22,6 +22,8 @@ export interface Firmware {
   region: string;
   kind: (typeof firmwareKinds)[number] | "";
   version: string;
+  designStart: string;
+  designEnd: string;
   devStart: string;
   devEnd: string;
   qaStart: string;
