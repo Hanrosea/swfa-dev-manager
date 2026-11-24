@@ -58,15 +58,20 @@ export function EffortFields({ effort, onChange }: { effort: Effort; onChange?: 
   </label>)}</div>;
 }
 
-export function FirmwareDetails({ item }: { item: Development }) {
+export function FirmwareDetails({ item, onStatus, busy }: {
+  item: Development; onStatus: (id: string, status: DevelopmentStatus) => void; busy: boolean;
+}) {
   const range = (start: string, end: string) => start ? `${start} ~ ${end}` : "미정";
   if (!item.firmware.length) return <p>등록된 FW가 없습니다.</p>;
-  return <div className="fw-table-wrap"><table className="fw-table fw-details">
+  return <div className="fw-table-wrap"><table className="fw-table fw-details" aria-label="개발 FW 목록">
     <thead><tr>{headings.map(h => <th key={h} scope="col">{h}</th>)}</tr></thead>
     <tbody>{item.firmware.map((fw, index) => <tr key={fw.id}>
       <th scope="row">{index + 1}</th><td>{fw.region || "미지정"}</td><td>{fw.kind || "미지정"}</td><td>{fw.version || "미지정"}</td>
       <td>{range(fw.devStart, fw.devEnd)}</td><td>{range(fw.qaStart, fw.qaEnd)}</td>
-      <td><span className={`status-badge status-${fw.status}`}>{fw.status}</span></td>
+      <td><select className={`row-status status-${fw.status}`} aria-label={`FW ${index + 1} 진행사항`}
+        value={fw.status} disabled={busy} onChange={e => onStatus(fw.id, e.target.value as DevelopmentStatus)}>
+        {statusOptions.map(status => <option key={status}>{status}</option>)}
+      </select></td>
     </tr>)}</tbody>
   </table></div>;
 }

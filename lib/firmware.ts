@@ -1,4 +1,4 @@
-import type { Development, Effort, Firmware, Phase } from "./types";
+import type { Development, Effort, Firmware, Phase, ProjectRowChange, Requirement } from "./types";
 
 export function emptyFirmware(id: string): Firmware {
   return { id, region: "", kind: "", version: "", devStart: "", devEnd: "", qaStart: "", qaEnd: "", status: "대기중" };
@@ -8,10 +8,27 @@ export function emptyEffort(): Effort {
   return { management: 0, design: 0, development: 0, quality: 0, execution: 0 };
 }
 
-export type LegacyDevelopment = Omit<Development, "firmware" | "effort"> & Partial<Pick<Development, "firmware" | "effort">>;
+export function emptyRequirement(id: string): Requirement {
+  return { id, kind: "", detail: "", reason: "", scheduledOn: "", status: "자료요청" };
+}
+
+export function legacyRequirements(projectId: string, note: string): Requirement[] {
+  return note.trim() ? [{ ...emptyRequirement(projectId), detail: note, status: null }] : [];
+}
+
+export function withRowStatus(project: Development, change: ProjectRowChange): Development {
+  if (change.type === "requirement") {
+    return { ...project, requirements: project.requirements.map(row => row.id === change.id ? { ...row, status: change.status } : row) };
+  }
+  return { ...project, firmware: project.firmware.map(fw => fw.id === change.id ? { ...fw, status: change.status } : fw) };
+}
+
+export type LegacyDevelopment = Omit<Development, "firmware" | "effort" | "requirements">
+  & Partial<Pick<Development, "firmware" | "effort">> & { requirements?: string | Requirement[] | null };
 
 export function upgradeDevelopment(item: LegacyDevelopment): Development {
-  if (item.firmware && item.effort) return { ...item, firmware: item.firmware, effort: item.effort };
+  const requirements = Array.isArray(item.requirements) ? item.requirements : legacyRequirements(item.id, item.requirements ?? "");
+  if (item.firmware && item.effort) return { ...item, requirements, firmware: item.firmware, effort: item.effort };
   const phases = item.phases ?? [];
   const firmware = { ...emptyFirmware(item.id), region: item.region, status: item.status };
   const effort = emptyEffort();
@@ -25,7 +42,7 @@ export function upgradeDevelopment(item: LegacyDevelopment): Development {
       if (phase.end > firmware[end]) firmware[end] = phase.end;
     }
   }
-  return { ...item, phases, firmware: item.firmware ?? [firmware], effort: item.effort ?? effort };
+  return { ...item, phases, requirements, firmware: item.firmware ?? [firmware], effort: item.effort ?? effort };
 }
 
 export function scheduledPeriods(item: Development) {

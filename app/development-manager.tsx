@@ -3,7 +3,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary, totalEffort } from "./firmware-fields";
-import { projectProgress, emptyEffort, emptyFirmware, qualityEntries, scheduledPeriods, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { projectProgress, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, scheduledPeriods, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { RequirementTable } from "./requirement-table";
 import { IssueDetail } from "./issue-detail";
 import { issueActivityKey, issueColumns, mapIssue, type Issue, type IssueSeverity, type IssueStatus } from "@/lib/issues";
 import { initialDevelopments } from "@/lib/mock-data";
@@ -13,6 +14,8 @@ import type {
   Development,
   DevelopmentStatus,
   NotificationAction,
+  ProjectRowChange,
+  Requirement,
   Effort,
   Firmware,
   PhaseType,
@@ -30,7 +33,9 @@ const notificationActions: NotificationAction[] = [
   "QA_PRIORITY_REORDERED",
   "QA_PRIORITY_REMOVED",
 ];
-const projectSelect = "*, development_phases(*), development_firmware(*)";
+const projectSelect = "*, development_phases(*), development_firmware(*), development_requirements(*)";
+const progressStates = ["진행중", "완료"] as const;
+type ProgressState = (typeof progressStates)[number];
 
 function normalizeStatus(value: unknown): DevelopmentStatus {
   if (value === "완료" || value === "대기중" || value === "개발진행" || value === "품질진행") {
@@ -108,7 +113,8 @@ function describeDevelopmentChange(before: Development, after: Development) {
   if (before.assignees.join("|") !== after.assignees.join("|")) {
     changes.push(`담당자: ${after.assignees.join(", ") || "미지정"}`);
   }
-  if (before.summary !== after.summary || before.requirements !== after.requirements) {
+  if (JSON.stringify(before.requirements) !== JSON.stringify(after.requirements)) changes.push("필요사항 수정");
+  if (before.summary !== after.summary) {
     changes.push("개발 내용 수정");
   }
   return changes.slice(0, 2).join(" · ") || "개발업무 내용이 수정되었습니다.";
@@ -156,6 +162,7 @@ function createCode(items: Development[]) {
 function mapDatabaseRow(row: Record<string, unknown>): Development {
   const phases = (row.development_phases as Record<string, unknown>[] | null) ?? [];
   const rows = (row.development_firmware ?? []) as Record<string, unknown>[];
+  const requirements = (row.development_requirements ?? []) as Record<string, unknown>[];
   return {
     id: String(row.id),
     code: String(row.development_code),
@@ -165,7 +172,12 @@ function mapDatabaseRow(row: Record<string, unknown>): Development {
     category: row.category as Development["category"],
     status: normalizeStatus(row.status),
     summary: String(row.summary ?? ""),
-    requirements: String(row.requirements ?? ""),
+    requirements: requirements.length
+      ? requirements.slice().sort((a, b) => Number(a.row_no) - Number(b.row_no)).map(r => ({
+        id: String(r.id), kind: String(r.kind), detail: String(r.detail), reason: String(r.reason),
+        scheduledOn: String(r.scheduled_on ?? ""), status: r.status as Requirement["status"],
+      }))
+      : legacyRequirements(String(row.id), String(row.requirements ?? "")),
     assignees: (row.assignee_names as string[] | null) ?? [],
     deploymentDate: row.deployment_date ? String(row.deployment_date) : undefined,
     updatedAt: String(row.updated_at ?? new Date().toISOString()),
@@ -204,6 +216,7 @@ export default function DevelopmentManager() {
   const [query, setQuery] = useState("");
   const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
+  const [progressFilters, setProgressFilters] = useState<ProgressState[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingDevelopment, setEditingDevelopment] = useState<Development | null>(null);
   const [toast, setToast] = useState("");
@@ -318,7 +331,7 @@ export default function DevelopmentManager() {
         ]);
         if (!mounted) return;
         if (developmentResult.error) {
-          setLoadError("FW 데이터를 불러올 수 없습니다. DB 연결과 FW 마이그레이션 적용 여부를 확인해주세요.");
+          setLoadError("프로젝트 데이터를 불러올 수 없습니다. DB 연결과 프로젝트 마이그레이션 적용 여부를 확인해주세요.");
         }
         if (!developmentResult.error) {
           const loadedItems = (developmentResult.data ?? []).map(mapDatabaseRow);
@@ -400,10 +413,11 @@ export default function DevelopmentManager() {
       return (
         matchesQuery &&
         (!categoryFilters.length || categoryFilters.includes(item.category)) &&
-        (!assigneeFilters.length || item.assignees.some((name) => assigneeFilters.includes(name)))
+        (!assigneeFilters.length || item.assignees.some((name) => assigneeFilters.includes(name))) &&
+        (!progressFilters.length || progressFilters.includes(projectProgress(item) === 100 ? "완료" : "진행중"))
       );
     });
-  }, [items, query, categoryFilters, assigneeFilters]);
+  }, [items, query, categoryFilters, assigneeFilters, progressFilters]);
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const daysCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
@@ -412,8 +426,8 @@ export default function DevelopmentManager() {
   const isCurrentMonth =
     month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth();
   const progressValues = items.map(projectProgress);
-  const activeCount = progressValues.filter(percent => percent > 0 && percent < 100).length;
   const completedCount = progressValues.filter(percent => percent === 100).length;
+  const activeCount = items.length - completedCount;
   const delayedCount = items.filter((item) => {
     const end = scheduleBounds(item).end;
     return (
@@ -553,6 +567,17 @@ export default function DevelopmentManager() {
     setSelectedId(null);
   };
 
+  const storeProject = (development: Development, previous?: Development) => {
+    const removedIds = new Set(previous?.firmware.map(fw => fw.id));
+    for (const fw of development.firmware) {
+      if (fw.status === "품질진행") removedIds.delete(fw.id);
+    }
+    setPriorityIds(current => current.filter(id => !removedIds.has(id)));
+    setItems(current => previous
+      ? current.map(item => item.id === development.id ? development : item)
+      : [development, ...current.filter(item => item.id !== development.id)]);
+  };
+
   const saveDevelopment = async (development: Development) => {
     const previous = items.find((item) => item.id === development.id);
     const supabase = getSupabaseBrowserClient();
@@ -569,17 +594,7 @@ export default function DevelopmentManager() {
     } else {
       development = { ...development, updatedAt: new Date().toISOString() };
     }
-    const removedIds = new Set(previous?.firmware.map(fw => fw.id));
-    for (const fw of development.firmware) {
-      if (fw.status === "품질진행") removedIds.delete(fw.id);
-    }
-    setPriorityIds(current => current.filter(id => !removedIds.has(id)));
-    setItems((current) => {
-      const exists = current.some((item) => item.id === development.id);
-      return exists
-        ? current.map((item) => (item.id === development.id ? development : item))
-        : [development, ...current];
-    });
+    storeProject(development, previous);
     setSelectedId(development.id);
     await createActivityNotification({
       action: previous ? "DEVELOPMENT_UPDATED" : "DEVELOPMENT_CREATED",
@@ -591,6 +606,47 @@ export default function DevelopmentManager() {
     });
     showMessage("변경사항을 저장했습니다.");
     return true;
+  };
+
+  const saveRowStatus = async (item: Development, change: ProjectRowChange) => {
+    const rows = change.type === "requirement" ? item.requirements : item.firmware;
+    const index = rows.findIndex(row => row.id === change.id);
+    const row = rows[index];
+    if (!row || row.status === change.status) return;
+    const db = getSupabaseBrowserClient();
+    let saved: Development;
+    if (db) {
+      const { data, error } = await db.rpc("set_development_row_status", {
+        target_project: item.id, row_type: change.type, target_row: change.id,
+        expected_status: row.status, next_status: change.status,
+      });
+      if (error) {
+        if (error.code === "40001") {
+          const latest = await db.from("developments").select(projectSelect).eq("id", item.id).is("deleted_at", null).maybeSingle();
+          if (!latest.error && latest.data) {
+            storeProject(mapDatabaseRow(latest.data), item);
+            showMessage("다른 사용자의 변경사항을 불러왔습니다. 진행사항을 다시 선택해주세요.");
+            return;
+          }
+          if (!latest.error && !latest.data) {
+            setItems(current => current.filter(project => project.id !== item.id));
+            setSelectedId(current => current === item.id ? null : current);
+          }
+        }
+        showMessage(`진행사항 저장 실패: ${error.message}`);
+        return;
+      }
+      saved = mapDatabaseRow(data);
+    } else {
+      saved = { ...withRowStatus(item, change), updatedAt: new Date().toISOString() };
+    }
+    storeProject(saved, item);
+    const section = change.type === "requirement" ? "필요사항" : "개발 FW";
+    showMessage(`${section} 진행사항을 저장했습니다.`);
+    await createActivityNotification({
+      action: "DEVELOPMENT_UPDATED", title: `${section} 진행사항 변경`, developmentId: item.id,
+      message: `“${item.name}” ${section} ${index + 1}행 · ${row.status ?? "미지정"} → ${change.status}`,
+    });
   };
 
   const savePriorityOrder = async (ids: string[], successMessage?: string) => {
@@ -761,32 +817,6 @@ export default function DevelopmentManager() {
     }
   };
 
-  const exportCsv = () => {
-    const header = ["개발코드", "개발명", "고객사", "지역", "구분", "담당자", "공정률", "전체일정", "배포예정일"];
-    const rows = filtered.map((item) => [
-      item.code,
-      item.name,
-      item.customer,
-      item.region,
-      item.category,
-      item.assignees.join(" / "),
-      `${projectProgress(item)}%`,
-      dateRange(item),
-      item.deploymentDate ?? "",
-    ]);
-    const csv = [header, ...rows]
-      .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `개발일정_${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-    showMessage("현재 목록을 CSV로 내려받았습니다.");
-  };
-
   const unreadNotificationIds = new Set(readNotificationIds);
   const unreadCount = notifications.filter((item) => !unreadNotificationIds.has(item.id)).length;
 
@@ -893,7 +923,7 @@ export default function DevelopmentManager() {
         {activeView === "dashboard" ? <>
           <section className="stat-grid" aria-label="일정 요약">
             <StatCard label="전체 개발" value={items.length} helper="등록된 개발 건" tone="navy" icon="▦" />
-            <StatCard label="진행 중" value={activeCount} helper="건 수" tone="blue" icon="▶" />
+            <StatCard label="진행중" value={activeCount} helper="건 수" tone="blue" icon="▶" />
             <StatCard label="완료" value={completedCount} helper="건 수" tone="green" icon="✓" />
             <StatCard label="지연" value={delayedCount} helper="건 수" tone="red" icon="↗" />
           </section>
@@ -922,7 +952,7 @@ export default function DevelopmentManager() {
             </label>
             <MultiFilterSelect label="구분" allLabel="전체 구분" values={categoryFilters} onChange={setCategoryFilters} options={["프로젝트", "유지보수"]} />
             <MultiFilterSelect label="담당자" allLabel="전체 담당자" values={assigneeFilters} onChange={setAssigneeFilters} options={assignees} />
-            <button className="export-button" onClick={exportCsv}>⇩ 내보내기</button>
+            <MultiFilterSelect label="진행상태" values={progressFilters} onChange={setProgressFilters} options={progressStates} />
           </div>
 
           <div className="legend-row">
@@ -979,8 +1009,9 @@ export default function DevelopmentManager() {
       </section>
 
       {selected && !showForm && (
-        <DetailPanel
+        <DetailPanel key={selected.id}
           item={selected}
+          onStatusChange={saveRowStatus}
           onClose={() => setSelectedId(null)}
           onDelete={deleteDevelopment}
           onEdit={() => { setEditingDevelopment(selected); setShowForm(true); }}
@@ -1219,7 +1250,7 @@ function IssueForm({ issue, onClose, onSave }: {
 
   return (
     <div className="modal-backdrop" onMouseDown={(event) => !saving && event.target === event.currentTarget && onClose()}>
-      <form className="priority-picker issue-form" role="dialog" aria-modal="true" aria-labelledby="issue-form-title" onKeyDown={e => { if (e.key === "Escape" && !saving) onClose(); }} onSubmit={submit}>
+      <form className={`priority-picker issue-form${issue ? " issue-edit-form" : ""}`} role="dialog" aria-modal="true" aria-labelledby="issue-form-title" onKeyDown={e => { if (e.key === "Escape" && !saving) onClose(); }} onSubmit={submit}>
         <header>
           <h2 id="issue-form-title">{issue ? "이슈사항 수정" : "이슈사항 추가"}</h2>
           <button type="button" disabled={saving} onClick={onClose} aria-label="팝업 닫기">×</button>
@@ -1288,21 +1319,23 @@ function PriorityPicker({ items, onClose, onConfirm }: {
   );
 }
 
-function MultiFilterSelect<T extends string>({ label, allLabel, values, onChange, options }: { label: string; allLabel: string; values: T[]; onChange: (values: T[]) => void; options: readonly T[] }) {
+function MultiFilterSelect<T extends string>({ label, allLabel, values, onChange, options }: { label: string; allLabel?: string; values: T[]; onChange: (values: T[]) => void; options: readonly T[] }) {
   const toggle = (option: T) => {
     onChange(values.includes(option) ? values.filter((value) => value !== option) : [...values, option]);
   };
-  const summary = values.length === 0 ? allLabel : values.length === 1 ? values[0] : `${label} ${values.length}개`;
+  const summary = values.length === 0 ? label : values.length === 1 ? values[0] : `${label} ${values.length}개`;
 
   return (
-    <details className="multi-filter">
+    <details className="multi-filter" name="dashboard-filters">
       <summary className={values.length ? "filtered" : ""}><span>{summary}</span><i aria-hidden="true">⌄</i></summary>
       <div className="multi-filter-menu" role="group" aria-label={`${label} 필터`}>
-        <label className={!values.length ? "checked" : ""}>
-          <input type="checkbox" checked={!values.length} onChange={() => onChange([])} />
-          <span className="multi-check">✓</span><em>{allLabel}</em>
-        </label>
-        <div className="multi-filter-divider" />
+        {allLabel && <>
+          <label className={!values.length ? "checked" : ""}>
+            <input type="checkbox" checked={!values.length} onChange={() => onChange([])} />
+            <span className="multi-check">✓</span><em>{allLabel}</em>
+          </label>
+          <div className="multi-filter-divider" />
+        </>}
         {options.map((option) => {
           const checked = values.includes(option);
           return (
@@ -1375,8 +1408,19 @@ function ProjectProgress({ value }: { value: number }) {
   return <div className="project-progress"><span>공정률</span><progress aria-label="프로젝트 공정률" max={100} value={value} /><strong>{value}%</strong></div>;
 }
 
-function DetailPanel({ item, onClose, onDelete, onEdit }: { item: Development; onClose: () => void; onDelete: (item: Development) => void; onEdit: () => void }) {
-  const progress = projectProgress(item);
+function DetailPanel({ item, onClose, onDelete, onEdit, onStatusChange }: {
+  item: Development; onClose: () => void; onDelete: (item: Development) => void; onEdit: () => void;
+  onStatusChange: (project: Development, change: ProjectRowChange) => Promise<void>;
+}) {
+  const [pending, setPending] = useState<ProjectRowChange | null>(null);
+  const display = pending ? withRowStatus(item, pending) : item;
+  const busy = pending !== null;
+  const progress = projectProgress(display);
+  async function changeStatus(change: ProjectRowChange) {
+    if (pending) return;
+    setPending(change);
+    try { await onStatusChange(item, change); } finally { setPending(null); }
+  }
   return (
     <aside className="detail-panel" aria-label="개발 상세">
       <div className="detail-head">
@@ -1396,10 +1440,15 @@ function DetailPanel({ item, onClose, onDelete, onEdit }: { item: Development; o
         </section>
         <div className="project-main">
           <section className="detail-section"><h3>개발 요약</h3><p className="body-copy">{item.summary}</p></section>
-          <section className="detail-section"><h3>필요사항</h3><p className="requirement-copy">{item.requirements || "등록된 필요사항이 없습니다."}</p></section>
+          <section className="detail-section">
+            <h3>필요사항 <small>{item.requirements.length}건</small></h3>
+            <RequirementTable rows={display.requirements} busy={busy}
+              onStatus={(id, status) => void changeStatus({ type: "requirement", id, status })} />
+          </section>
           <section className="detail-section">
             <h3>개발 FW <small>{item.firmware.length}건</small></h3>
-            <FirmwareDetails item={item} />
+            <FirmwareDetails item={display} busy={busy}
+              onStatus={(id, status) => void changeStatus({ type: "firmware", id, status })} />
           </section>
           <section className="detail-section">
             <h3>공수 <small>합계 {totalEffort(item.effort)} MD</small></h3>
@@ -1407,7 +1456,9 @@ function DetailPanel({ item, onClose, onDelete, onEdit }: { item: Development; o
           </section>
         </div>
       </div>
-      <div className="detail-actions"><button className="danger" onClick={() => onDelete(item)}>삭제</button><button className="solid" onClick={onEdit}>수정</button></div>
+      <div className="detail-actions">{busy && <span role="status">진행사항 저장 중…</span>}
+        <button className="danger" onClick={() => onDelete(item)} disabled={busy}>삭제</button>
+        <button className="solid" onClick={onEdit} disabled={busy}>수정</button></div>
     </aside>
   );
 }
@@ -1425,11 +1476,12 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
       category: item?.category ?? "프로젝트" as Development["category"],
       assignee: item?.assignees.join(", ") ?? "담당자",
       summary: item?.summary ?? "",
-      requirements: item?.requirements ?? "",
       deploymentDate: item?.deploymentDate ?? "",
     };
   });
 
+  const [requirements, setRequirements] = useState<Requirement[]>(() =>
+    item?.requirements.length ? item.requirements : [emptyRequirement(uuidv4())]);
   const [rows, setRows] = useState<Firmware[]>(() => item?.firmware ?? [emptyFirmware(uuidv4())]);
   const [effort, setEffort] = useState<Effort>(() => item?.effort ?? emptyEffort());
   const firmware = rows.map(fw => ({ ...fw, version: fw.version.trim(), region: fw.region.trim() }))
@@ -1455,7 +1507,8 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
       category: form.category,
       status: item?.status ?? "대기중",
       summary: form.summary.trim(),
-      requirements: form.requirements.trim(),
+      requirements: requirements.filter(r => item?.requirements.some(old => old.id === r.id) ||
+        r.kind.trim() || r.detail.trim() || r.reason.trim() || r.scheduledOn || r.status !== "자료요청"),
       assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean),
       deploymentDate: form.deploymentDate || undefined,
       phases: item?.phases ?? [],
@@ -1505,9 +1558,9 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
           </div></fieldset>
           <div className="project-main">
             <div className="form-grid project-description">
-              <label className="wide">개발 요약 <textarea value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={3} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
-              <label className="wide">필요사항 <textarea value={form.requirements} onChange={(e) => set("requirements", e.target.value)} rows={2} placeholder="고객사 회신, 샘플 장비 등 선행 필요사항" /></label>
+              <label className="wide">개발 요약 <textarea className="project-summary-input" value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={7} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
             </div>
+            <fieldset><legend>필요사항</legend><RequirementTable rows={requirements} onChange={setRequirements} /></fieldset>
             <FirmwareEditor rows={rows} onChange={setRows} />
             <fieldset><legend>공수 <small>합계 {totalEffort(effort)} MD</small></legend><EffortFields effort={effort} onChange={setEffort} /></fieldset>
             {formError && <p className="form-error" role="alert">{formError}</p>}

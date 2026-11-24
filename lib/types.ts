@@ -29,6 +29,22 @@ export interface Firmware {
   status: DevelopmentStatus;
 }
 
+export const requirementStatuses = ["자료요청", "회신대기", "수신완료"] as const;
+export type RequirementStatus = (typeof requirementStatuses)[number];
+
+export interface Requirement {
+  id: string;
+  kind: string;
+  detail: string;
+  reason: string;
+  scheduledOn: string;
+  status: RequirementStatus | null;
+}
+
+export type ProjectRowChange =
+  | { type: "requirement"; id: string; status: RequirementStatus }
+  | { type: "firmware"; id: string; status: DevelopmentStatus };
+
 export const effortLabels = {
   management: "사업 총괄",
   design: "분석 및 설계",
@@ -47,7 +63,7 @@ export interface Development {
   category: "프로젝트" | "유지보수";
   status: DevelopmentStatus;
   summary: string;
-  requirements: string;
+  requirements: Requirement[];
   assignees: string[];
   deploymentDate?: string;
   phases: Phase[]; // Original phase records retained for historical reference.
