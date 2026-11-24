@@ -2,7 +2,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary, statusOptions, totalEffort } from "./firmware-fields";
+import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary, totalEffort } from "./firmware-fields";
 import { projectProgress, emptyEffort, emptyFirmware, qualityEntries, scheduledPeriods, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
 import { initialDevelopments } from "@/lib/mock-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
@@ -190,6 +190,7 @@ function mapDatabaseRow(row: Record<string, unknown>): Development {
     phases: phases.map((phase) => ({
       id: String(phase.id),
       type: phase.phase_type as PhaseType,
+      memo: String(phase.memo ?? ""),
       start: String(phase.planned_start),
       end: String(phase.planned_end),
       md: Number(phase.planned_md ?? 0),
@@ -213,7 +214,6 @@ export default function DevelopmentManager() {
     return new Date(current.getFullYear(), current.getMonth(), 1);
   });
   const [query, setQuery] = useState("");
-  const [statusFilters, setStatusFilters] = useState<DevelopmentStatus[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -418,12 +418,11 @@ export default function DevelopmentManager() {
           .includes(normalized);
       return (
         matchesQuery &&
-        (!statusFilters.length || statusFilters.includes(item.status)) &&
         (!categoryFilters.length || categoryFilters.includes(item.category)) &&
         (!assigneeFilters.length || item.assignees.some((name) => assigneeFilters.includes(name)))
       );
     });
-  }, [items, query, statusFilters, categoryFilters, assigneeFilters]);
+  }, [items, query, categoryFilters, assigneeFilters]);
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const daysCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
@@ -431,12 +430,12 @@ export default function DevelopmentManager() {
   const today = new Date();
   const isCurrentMonth =
     month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth();
-  const activeCount = items.filter((item) => ["개발진행", "품질진행"].includes(item.status)).length;
-  const completedCount = items.filter((item) => item.status === "완료").length;
+  const progressValues = items.map(projectProgress);
+  const activeCount = progressValues.filter(percent => percent > 0 && percent < 100).length;
+  const completedCount = progressValues.filter(percent => percent === 100).length;
   const delayedCount = items.filter((item) => {
     const end = scheduleBounds(item).end;
     return (
-      item.status !== "완료" &&
       end &&
       end < localDate(today) &&
       projectProgress(item) < 100
@@ -664,11 +663,6 @@ export default function DevelopmentManager() {
     showMessage("이슈사항을 삭제했습니다.");
   };
 
-  const quickStatusChange = async (status: DevelopmentStatus) => {
-    if (!selected) return;
-    await saveDevelopment({ ...selected, status });
-  };
-
   const deleteDevelopment = async (development: Development) => {
     if (!window.confirm(`'${development.name}' 개발 건을 삭제할까요?`)) return;
 
@@ -775,14 +769,13 @@ export default function DevelopmentManager() {
   };
 
   const exportCsv = () => {
-    const header = ["개발코드", "개발명", "고객사", "지역", "구분", "상태", "담당자", "진행률", "전체일정", "배포예정일"];
+    const header = ["개발코드", "개발명", "고객사", "지역", "구분", "담당자", "공정률", "전체일정", "배포예정일"];
     const rows = filtered.map((item) => [
       item.code,
       item.name,
       item.customer,
       item.region,
       item.category,
-      item.status,
       item.assignees.join(" / "),
       `${projectProgress(item)}%`,
       dateRange(item),
@@ -821,7 +814,7 @@ export default function DevelopmentManager() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
+      <aside className="sidebar" inert={showForm}>
         <div className="brand">
           <span className="brand-mark">M</span>
           <div><strong>MYBI</strong><small>개발업무관리</small></div>
@@ -859,7 +852,7 @@ export default function DevelopmentManager() {
         </div>
       </aside>
 
-      <section className="workspace">
+      <section inert={showForm || Boolean(selected)} className={`workspace ${activeView === "dashboard" ? "dashboard-workspace" : ""}`}>
         <header className="topbar">
           <div>
             <p className="eyebrow">차량내디바이스팀</p>
@@ -933,7 +926,6 @@ export default function DevelopmentManager() {
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="개발명, 지역, FW 버전 검색" />
               {query && <button onClick={() => setQuery("")} aria-label="검색어 지우기">×</button>}
             </label>
-            <MultiFilterSelect label="상태" allLabel="전체 상태" values={statusFilters} onChange={setStatusFilters} options={statusOptions} />
             <MultiFilterSelect label="구분" allLabel="전체 구분" values={categoryFilters} onChange={setCategoryFilters} options={["프로젝트", "유지보수"]} />
             <MultiFilterSelect label="담당자" allLabel="전체 담당자" values={assigneeFilters} onChange={setAssigneeFilters} options={assignees} />
             <button className="export-button" onClick={exportCsv}>⇩ 내보내기</button>
@@ -949,18 +941,19 @@ export default function DevelopmentManager() {
 
           <div className="gantt-scroll">
             <div className="gantt" style={{ "--day-count": daysCount } as React.CSSProperties}>
-              <div className="gantt-head sticky-info">
-                <span>개발 업무</span><span>담당 / 상태</span>
+              <div className="gantt-calendar-head">
+                <div className="gantt-head sticky-info">
+                  <span>개발 업무</span><span>담당 / 공정률</span>
+                </div>
+                <div className="day-heads">
+                  {days.map((day) => {
+                    const date = new Date(month.getFullYear(), month.getMonth(), day);
+                    const weekend = date.getDay() === 0 || date.getDay() === 6;
+                    const current = isCurrentMonth && day === today.getDate();
+                    return <span key={day} className={`${weekend ? "weekend" : ""} ${current ? "today" : ""}`}><small>{["일", "월", "화", "수", "목", "금", "토"][date.getDay()]}</small>{day}</span>;
+                  })}
+                </div>
               </div>
-              <div className="day-heads">
-                {days.map((day) => {
-                  const date = new Date(month.getFullYear(), month.getMonth(), day);
-                  const weekend = date.getDay() === 0 || date.getDay() === 6;
-                  const current = isCurrentMonth && day === today.getDate();
-                  return <span key={day} className={`${weekend ? "weekend" : ""} ${current ? "today" : ""}`}><small>{["일", "월", "화", "수", "목", "금", "토"][date.getDay()]}</small>{day}</span>;
-                })}
-              </div>
-
               {filtered.length ? filtered.map((item) => (
                 <TimelineRow key={item.id} item={item} month={month} daysCount={daysCount} today={today} selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
               )) : (
@@ -989,11 +982,10 @@ export default function DevelopmentManager() {
         )}
       </section>
 
-      {selected && (
+      {selected && !showForm && (
         <DetailPanel
           item={selected}
           onClose={() => setSelectedId(null)}
-          onStatusChange={quickStatusChange}
           onDelete={deleteDevelopment}
           onEdit={() => { setEditingDevelopment(selected); setShowForm(true); }}
         />
@@ -1341,15 +1333,15 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
     return style ? [{ phase, style }] : [];
   });
   const lanes = [...new Set(bars.map(bar => bar.phase.lane))];
-  const height = Math.max(50, 20 + 14 * lanes.length);
+  const laneHeight = 18;
+  const height = Math.max(66, 24 + laneHeight * lanes.length);
   return (
     <button style={{ height }} className={`timeline-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <div className="task-info">
         <div className="task-title"><strong>{item.name}</strong><small>{item.code} · {item.customer} · {item.region}</small></div>
         <div className="task-meta">
           <span className="mini-avatars">{item.assignees.slice(0, 3).map((name, index) => <i key={name} style={{ zIndex: 3 - index }} title={name}>{name.slice(0, 1)}</i>)}</span>
-          <span className={`status-badge status-${item.status}`}>{item.status}</span>
-          <span className="row-progress" title="개발 진행률"><i style={{ width: `${progress}%` }} />{progress}%</span>
+          <span className="timeline-percent"><progress aria-label="공정률" value={progress} max={100} /><b>{progress}%</b></span>
         </div>
       </div>
       <div className="timeline-track">
@@ -1360,7 +1352,7 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
         {month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth() && <span className="today-line" style={{ left: `${((today.getDate() - 0.5) / daysCount) * 100}%` }} />}
         {bars.map(({ phase, style }) => (
           <span key={phase.id} className={`phase-bar ${phase.type.toLowerCase()}`}
-            style={{ ...style, top: (height - (lanes.length - 1) * 14) / 2 + lanes.indexOf(phase.lane) * 14 }}
+            style={{ ...style, top: (height - (lanes.length - 1) * laneHeight) / 2 + lanes.indexOf(phase.lane) * laneHeight }}
             title={`${phase.label} · ${phaseMeta[phase.type].label} ${phase.start} ~ ${phase.end}`}>
             <i style={{ width: "100%" }} /><em>{phaseMeta[phase.type].short}</em>
           </span>
@@ -1375,7 +1367,11 @@ function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { it
   );
 }
 
-function DetailPanel({ item, onClose, onStatusChange, onDelete, onEdit }: { item: Development; onClose: () => void; onStatusChange: (status: DevelopmentStatus) => void; onDelete: (item: Development) => void; onEdit: () => void }) {
+function ProjectProgress({ value }: { value: number }) {
+  return <div className="project-progress"><span>공정률</span><progress aria-label="프로젝트 공정률" max={100} value={value} /><strong>{value}%</strong></div>;
+}
+
+function DetailPanel({ item, onClose, onDelete, onEdit }: { item: Development; onClose: () => void; onDelete: (item: Development) => void; onEdit: () => void }) {
   const progress = projectProgress(item);
   return (
     <aside className="detail-panel" aria-label="개발 상세">
@@ -1383,12 +1379,9 @@ function DetailPanel({ item, onClose, onStatusChange, onDelete, onEdit }: { item
         <div><span className="detail-code">{item.code}</span><h2>{item.name}</h2></div>
         <button onClick={onClose} aria-label="상세 닫기">×</button>
       </div>
-      <div className="detail-scroll">
-        <div className="detail-state-row">
-          <label>프로젝트 상태<select value={item.status} onChange={(event) => onStatusChange(event.target.value as DevelopmentStatus)}>{statusOptions.map((status) => <option key={status}>{status}</option>)}</select></label>
-          <div className="overall-progress"><span>진행률 {progress}%</span><i><b style={{ width: `${progress}%` }} /></i></div>
-        </div>
-        <section className="detail-section">
+      <ProjectProgress value={progress} />
+      <div className="detail-scroll project-columns">
+        <section className="detail-section project-basics">
           <h3>기본 정보</h3>
           <dl className="detail-grid">
             <div><dt>고객사</dt><dd>{item.customer}</dd></div><div><dt>지역</dt><dd>{item.region}</dd></div>
@@ -1397,16 +1390,18 @@ function DetailPanel({ item, onClose, onStatusChange, onDelete, onEdit }: { item
             <div className="wide"><dt>배포 예정일</dt><dd>{item.deploymentDate ?? "미정"}</dd></div>
           </dl>
         </section>
-        <section className="detail-section"><h3>개발 요약</h3><p className="body-copy">{item.summary}</p></section>
-        <section className="detail-section"><h3>필요사항</h3><p className="requirement-copy">{item.requirements || "등록된 필요사항이 없습니다."}</p></section>
-        <section className="detail-section">
-          <h3>개발 FW <small>{item.firmware.length}건</small></h3>
-          <FirmwareDetails item={item} />
-        </section>
-        <section className="detail-section">
-          <h3>공수 <small>합계 {totalEffort(item.effort)} MD</small></h3>
-          <EffortFields effort={item.effort} />
-        </section>
+        <div className="project-main">
+          <section className="detail-section"><h3>개발 요약</h3><p className="body-copy">{item.summary}</p></section>
+          <section className="detail-section"><h3>필요사항</h3><p className="requirement-copy">{item.requirements || "등록된 필요사항이 없습니다."}</p></section>
+          <section className="detail-section">
+            <h3>개발 FW <small>{item.firmware.length}건</small></h3>
+            <FirmwareDetails item={item} />
+          </section>
+          <section className="detail-section">
+            <h3>공수 <small>합계 {totalEffort(item.effort)} MD</small></h3>
+            <EffortFields effort={item.effort} />
+          </section>
+        </div>
       </div>
       <div className="detail-actions"><button className="danger" onClick={() => onDelete(item)}>삭제</button><button className="solid" onClick={onEdit}>수정</button></div>
     </aside>
@@ -1433,8 +1428,11 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
 
   const [rows, setRows] = useState<Firmware[]>(() => item?.firmware ?? [emptyFirmware(uuidv4())]);
   const [effort, setEffort] = useState<Effort>(() => item?.effort ?? emptyEffort());
+  const firmware = rows.map(fw => ({ ...fw, version: fw.version.trim(), region: fw.region.trim() }))
+    .filter(fw => item?.firmware.some(old => old.id === fw.id) ||
+      fw.region || fw.kind || fw.version || fw.devStart || fw.devEnd || fw.qaStart || fw.qaEnd || fw.status !== "대기중");
+  const progress = projectProgress({ id: item?.id ?? "", status: item?.status ?? "대기중", phases: item?.phases ?? [], firmware, effort });
   const buildDevelopment = () => {
-    const firmware = rows.map(fw => ({ ...fw, version: fw.version.trim(), region: fw.region.trim() }));
     for (const [index, fw] of firmware.entries()) {
       for (const [label, start, end] of [["개발", fw.devStart, fw.devEnd], ["품질", fw.qaStart, fw.qaEnd]]) {
         if (Boolean(start) !== Boolean(end) || start > end) {
@@ -1457,8 +1455,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
       assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean),
       deploymentDate: form.deploymentDate || undefined,
       phases: item?.phases ?? [],
-      firmware: firmware.filter(fw => item?.firmware.some(old => old.id === fw.id) ||
-        fw.region || fw.kind || fw.version || fw.devStart || fw.qaStart || fw.status !== "대기중"),
+      firmware,
       effort,
       updatedAt: item?.updatedAt ?? new Date().toISOString(),
     } satisfies Development;
@@ -1489,23 +1486,28 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
   const set = (key: keyof typeof form, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
   const isEditing = Boolean(item);
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="project-editor-backdrop">
       <form className="development-form" role="dialog" aria-modal="true" aria-label={isEditing ? "개발업무 수정" : "새 개발 건 등록"} onSubmit={submit}>
         <header><div><span>{isEditing ? `EDIT DEVELOPMENT · ${item?.code}` : "NEW DEVELOPMENT"}</span><h2>{isEditing ? "개발업무 수정" : "새 개발 건 등록"}</h2><p>프로젝트 정보와 FW별 일정, 공수를 입력합니다.</p></div><button type="button" aria-label="등록 창 닫기" onClick={onClose}>×</button></header>
-        <div className="form-scroll">
-          <fieldset><legend>기본 정보</legend><div className="form-grid">
+        <ProjectProgress value={progress} />
+        <div className="form-scroll project-columns">
+          <fieldset className="project-basics"><legend>기본 정보</legend><div className="form-grid">
             <label className="wide">개발명 <input autoFocus required value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="예: 부산 승하차단말기 8BIN 적용" /></label>
             <label>고객사 <input value={form.customer} onChange={(e) => set("customer", e.target.value)} /></label>
             <label>지역 <input required value={form.region} onChange={(e) => set("region", e.target.value)} placeholder="예: 부산" /></label>
             <label>개발 구분 <select value={form.category} onChange={(e) => set("category", e.target.value)}><option>프로젝트</option><option>유지보수</option></select></label>
             <label>배포 일정 <input type="date" value={form.deploymentDate} onInput={(e) => set("deploymentDate", e.currentTarget.value)} /></label>
             <label className="wide">담당자 <input value={form.assignee} onChange={(e) => set("assignee", e.target.value)} placeholder="여러 명은 쉼표로 구분" /><small>여러 명은 쉼표(,)로 구분하세요.</small></label>
-            <label className="wide">개발 요약 <textarea value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={3} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
-            <label className="wide">필요사항 <textarea value={form.requirements} onChange={(e) => set("requirements", e.target.value)} rows={2} placeholder="고객사 회신, 샘플 장비 등 선행 필요사항" /></label>
           </div></fieldset>
-          <FirmwareEditor rows={rows} onChange={setRows} />
-          <fieldset><legend>공수 <small>합계 {totalEffort(effort)} MD</small></legend><EffortFields effort={effort} onChange={setEffort} /></fieldset>
-          {formError && <p className="form-error" role="alert">{formError}</p>}
+          <div className="project-main">
+            <div className="form-grid project-description">
+              <label className="wide">개발 요약 <textarea value={form.summary} onChange={(e) => set("summary", e.target.value)} rows={3} placeholder="개발 목적과 핵심 내용을 적어주세요." /></label>
+              <label className="wide">필요사항 <textarea value={form.requirements} onChange={(e) => set("requirements", e.target.value)} rows={2} placeholder="고객사 회신, 샘플 장비 등 선행 필요사항" /></label>
+            </div>
+            <FirmwareEditor rows={rows} onChange={setRows} />
+            <fieldset><legend>공수 <small>합계 {totalEffort(effort)} MD</small></legend><EffortFields effort={effort} onChange={setEffort} /></fieldset>
+            {formError && <p className="form-error" role="alert">{formError}</p>}
+          </div>
         </div>
         <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : isEditing ? "수정 저장" : "개발 건 등록"}</button></footer>
       </form>
@@ -1517,7 +1519,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
             <div className="conflict-list">
               {scheduleConflicts.map((item) => (
                 <article key={item.id}>
-                  <div><strong>{item.name}</strong><small>{item.code} · {item.status}</small></div>
+                  <div><strong>{item.name}</strong><small>{item.code} · 공정률 {projectProgress(item)}%</small></div>
                   <span>{dateRange(item)}</span>
                 </article>
               ))}

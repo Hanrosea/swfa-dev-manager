@@ -35,10 +35,19 @@ export function scheduledPeriods(item: Development) {
     if (fw.devStart && fw.devEnd) periods.push({ id: fw.id + "-dev", type: "DEVELOPMENT", start: fw.devStart, end: fw.devEnd, label, lane: index * 2 });
     if (fw.qaStart && fw.qaEnd) periods.push({ id: fw.id + "-qa", type: "QA", start: fw.qaStart, end: fw.qaEnd, label, lane: index * 2 + 1 });
   }
-  // Business and deployment ranges from older projects are still visible on the calendar.
+  const isReviewedBusiness = (phase: Phase) => phase.type === "BUSINESS" && phase.memo?.startsWith("검토본 사업기간 · ");
+  const hasReviewedBusiness = item.phases.some(isReviewedBusiness);
+  const byDates = new Map<string, typeof periods[number]>();
   for (const phase of item.phases) {
-    if (phase.type === "BUSINESS" || phase.type === "DEPLOY") periods.push({ ...phase, label: "기존 일정", lane: item.firmware.length * 2 });
+    if (phase.type !== "BUSINESS" && phase.type !== "DEPLOY") continue;
+    if (phase.type === "BUSINESS" && hasReviewedBusiness && !isReviewedBusiness(phase)) continue;
+    const label = phase.memo || "기존 일정";
+    const key = [phase.type, phase.start, phase.end].join("/");
+    const same = byDates.get(key);
+    if (same) same.label += " / " + label;
+    else byDates.set(key, { ...phase, label, lane: item.firmware.length * 2 + byDates.size });
   }
+  periods.push(...byDates.values());
   return periods;
 }
 
@@ -47,13 +56,13 @@ export function qualityEntries(items: Development[]): PriorityEntry[] {
   return items.flatMap(project => project.firmware.filter(fw => fw.status === "품질진행").map(fw => ({ project, fw })));
 }
 
-export function projectProgress(item: Development) {
-  if (item.status === "완료") return 100;
+export function projectProgress(item: Pick<Development, "id" | "status" | "phases" | "effort" | "firmware">) {
   const count = item.firmware.length;
-  if (!count) return 0;
+  if (!count) return item.status === "완료" ? 100 : 0;
+  if (item.firmware.every(fw => fw.status === "완료")) return 100;
   const totals = item.effort;
   const total = Object.values(totals).reduce((sum, value) => sum + value, 0);
-  if (!total) return Math.round(100 * item.firmware.filter(fw => fw.status === "완료").length / count);
+  if (!total) return Math.min(99, Math.round(100 * item.firmware.filter(fw => fw.status === "완료").length / count));
   // Keep manually recorded phase progress as a floor for the migrated FW.
   const legacyProgress = (type: Phase["type"]) => {
     const phases = item.phases.filter(p => p.type === type);
@@ -70,5 +79,5 @@ export function projectProgress(item: Development) {
     done += (totals.management + totals.design) * business + totals.development * development;
     if (migrated) done += totals.quality * legacy.qa + totals.execution * legacy.deploy;
   }
-  return Math.round(100 * done / (count * total));
+  return Math.min(99, Math.round(100 * done / (count * total)));
 }
