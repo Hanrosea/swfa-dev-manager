@@ -41,7 +41,13 @@ npm run dev
    신규 및 기존 DB 모두 앱 배포 직전에 `supabase/migrations/20261124_firmware.sql`을 실행합니다. 전환 중에는 기존 화면에서 일정·우선순위 수정을 잠시 중단합니다.
    이슈 활동기록은 신규 및 기존 DB 모두 `supabase/migrations/20261124060659_issue_activities.sql`을 실행해 추가합니다.
    이어서 `supabase/migrations/20261124070617_development_requirements.sql`을 실행합니다. 기존 필요사항 메모는 상세내용 한 행으로 이관되며 진행사항은 직접 선택할 수 있습니다.
-   마지막으로 `supabase/migrations/20261124091921_firmware_design_schedule.sql`을 실행합니다. 기존 설계일정은 미정으로 시작하며, 자동 계산으로 교체한 기존 배포일은 `legacy_deployment_date`에 보관합니다.
+   이어서 다음 FW 일정 마이그레이션을 순서대로 실행합니다.
+   1. `supabase/migrations/20261124123629_firmware_design_columns.sql`
+   2. `supabase/migrations/20261124133802_firmware_schedule_rules.sql`
+   3. `supabase/migrations/20261124133830_save_firmware_design_schedule.sql`
+   4. `supabase/migrations/20261124133845_align_firmware_release_dates.sql`
+
+   설계일정은 미정으로 시작하며, 자동 계산으로 교체한 기존 배포일은 `legacy_deployment_date`에 보관합니다.
 3. Authentication의 Users 메뉴에서 사용할 이메일 계정을 만듭니다.
 4. `.env.example`을 `.env.local`로 복사하고 값을 입력합니다.
 
