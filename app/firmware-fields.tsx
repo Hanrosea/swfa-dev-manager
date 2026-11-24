@@ -1,21 +1,21 @@
 import { v4 as uuidv4 } from "uuid";
 import { effortLabels, firmwareKinds, type Development, type DevelopmentStatus, type Effort, type Firmware } from "@/lib/types";
+import { firmwareStages, type FirmwareStage } from "@/lib/schedule";
 import { emptyFirmware, type PriorityEntry } from "@/lib/firmware";
 
 export const statusOptions: DevelopmentStatus[] = ["대기중", "개발진행", "품질진행", "완료"];
 const effortKeys = Object.keys(effortLabels) as (keyof Effort)[];
-const headings = ["NO", "지역", "구분", "FW 버전", "개발일정", "품질일정", "진행사항"];
+const headings = ["NO", "지역", "구분", "FW 버전", ...firmwareStages.map(stage => stage.label + "일정"), "진행사항"];
 
 export function totalEffort(effort: Effort) {
   return Number(Object.values(effort).reduce((sum, value) => sum + value, 0).toFixed(2));
 }
 
 function DatePair({ fw, stage, number, onChange }: {
-  fw: Firmware; stage: "dev" | "qa"; number: number; onChange: (patch: Partial<Firmware>) => void;
+  fw: Firmware; stage: FirmwareStage; number: number; onChange: (patch: Partial<Firmware>) => void;
 }) {
-  const start = stage === "dev" ? "devStart" : "qaStart";
-  const end = stage === "dev" ? "devEnd" : "qaEnd";
-  const label = `FW ${number} ${stage === "dev" ? "개발" : "품질"}`;
+  const { start, end } = stage;
+  const label = `FW ${number} ${stage.label}`;
   return <div className="fw-dates">
     <label><span>시작</span><input type="date" aria-label={label + " 시작일"} value={fw[start]} onInput={e => onChange({ [start]: e.currentTarget.value })} /></label>
     <label><span>종료</span><input type="date" aria-label={label + " 종료일"} min={fw[start] || undefined} value={fw[end]} onInput={e => onChange({ [end]: e.currentTarget.value })} /></label>
@@ -25,7 +25,12 @@ function DatePair({ fw, stage, number, onChange }: {
 export function FirmwareEditor({ rows, onChange }: { rows: Firmware[]; onChange: (rows: Firmware[]) => void }) {
   const insert = (index: number) => onChange([...rows.slice(0, index), emptyFirmware(uuidv4()), ...rows.slice(index)]);
   return <fieldset><legend>개발 FW</legend>
-    <div className="fw-table-wrap"><table className="fw-table fw-editor">
+    <div className="fw-table-wrap"><table className="fw-table fw-editor" aria-label="개발 FW 편집">
+      <colgroup>
+        <col className="fw-col-no" /><col className="fw-col-short" /><col className="fw-col-kind" /><col className="fw-col-short" />
+        {firmwareStages.map(stage => <col key={stage.type} />)}
+        <col className="fw-col-status" /><col className="fw-col-actions" />
+      </colgroup>
       <thead><tr>{[...headings, "추가"].map(h => <th scope="col" key={h}>{h}</th>)}</tr></thead>
       <tbody>{rows.map((fw, index) => {
         const no = index + 1;
@@ -36,8 +41,7 @@ export function FirmwareEditor({ rows, onChange }: { rows: Firmware[]; onChange:
           <td><select aria-label={`FW ${no} 구분`} value={fw.kind} onChange={e => update({ kind: e.target.value as Firmware["kind"] })}>
             <option value="">미지정</option>{firmwareKinds.map(k => <option key={k}>{k}</option>)}</select></td>
           <td><input aria-label={`FW ${no} 버전`} value={fw.version} onChange={e => update({ version: e.target.value })} /></td>
-          <td><DatePair fw={fw} stage="dev" number={no} onChange={update} /></td>
-          <td><DatePair fw={fw} stage="qa" number={no} onChange={update} /></td>
+          {firmwareStages.map(stage => <td key={stage.type}><DatePair fw={fw} stage={stage} number={no} onChange={update} /></td>)}
           <td><select aria-label={`FW ${no} 진행사항`} value={fw.status} onChange={e => update({ status: e.target.value as DevelopmentStatus })}>{statusOptions.map(s => <option key={s}>{s}</option>)}</select></td>
           <td><div className="fw-row-actions">
             <button type="button" onClick={() => insert(no)} aria-label={`FW ${no} 아래 행 추가`}>＋</button>
@@ -67,7 +71,7 @@ export function FirmwareDetails({ item, onStatus, busy }: {
     <thead><tr>{headings.map(h => <th key={h} scope="col">{h}</th>)}</tr></thead>
     <tbody>{item.firmware.map((fw, index) => <tr key={fw.id}>
       <th scope="row">{index + 1}</th><td>{fw.region || "미지정"}</td><td>{fw.kind || "미지정"}</td><td>{fw.version || "미지정"}</td>
-      <td>{range(fw.devStart, fw.devEnd)}</td><td>{range(fw.qaStart, fw.qaEnd)}</td>
+      {firmwareStages.map(stage => <td key={stage.type}>{range(fw[stage.start], fw[stage.end])}</td>)}
       <td><select className={`row-status status-${fw.status}`} aria-label={`FW ${index + 1} 진행사항`}
         value={fw.status} disabled={busy} onChange={e => onStatus(fw.id, e.target.value as DevelopmentStatus)}>
         {statusOptions.map(status => <option key={status}>{status}</option>)}

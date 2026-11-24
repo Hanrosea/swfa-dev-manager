@@ -3,7 +3,9 @@
 import { v4 as uuidv4 } from "uuid";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary, totalEffort } from "./firmware-fields";
-import { projectProgress, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, scheduledPeriods, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { projectProgress, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { deploymentAfterQuality, firmwareStages, scheduledPeriods, timelineStages } from "@/lib/schedule";
+import { TimelineRow } from "./schedule-timeline";
 import { RequirementTable } from "./requirement-table";
 import { IssueDetail } from "./issue-detail";
 import { issueActivityKey, issueColumns, mapIssue, type Issue, type IssueSeverity, type IssueStatus } from "@/lib/issues";
@@ -53,16 +55,8 @@ function normalizeStatus(value: unknown): DevelopmentStatus {
   return "대기중";
 }
 
-const phaseMeta: Record<PhaseType, { label: string; short: string }> = {
-  BUSINESS: { label: "사업", short: "사" },
-  DEVELOPMENT: { label: "개발", short: "개" },
-  QA: { label: "품질", short: "품" },
-  DEPLOY: { label: "배포", short: "배" },
-};
-
 const menuItems = [
   { id: "dashboard", label: "일정 대시보드", icon: "▦" },
-  { id: "developments", label: "전체 개발", icon: "≡" },
   { id: "priority", label: "우선 순위", icon: "↕" },
   { id: "issues", label: "이슈사항", icon: "!" },
 ] as const;
@@ -184,6 +178,7 @@ function mapDatabaseRow(row: Record<string, unknown>): Development {
     effort: row.effort_md as Effort,
     firmware: rows.slice().sort((a, b) => Number(a.row_no) - Number(b.row_no)).map(fw => ({
       id: String(fw.id), region: String(fw.region), kind: fw.kind as Firmware["kind"], version: String(fw.version),
+      designStart: String(fw.design_start ?? ""), designEnd: String(fw.design_end ?? ""),
       devStart: String(fw.dev_start ?? ""), devEnd: String(fw.dev_end ?? ""),
       qaStart: String(fw.qa_start ?? ""), qaEnd: String(fw.qa_end ?? ""), status: normalizeStatus(fw.status),
     })),
@@ -848,13 +843,9 @@ export default function DevelopmentManager() {
               className={activeView === item.id ? "active" : ""}
               key={item.id}
               onClick={() => {
-                if (item.id === "dashboard" || item.id === "priority" || item.id === "issues") {
-                  setSelectedIssueId(null);
-                  setActiveView(item.id);
-                  setSelectedId(null);
-                  return;
-                }
-                showMessage("전체 개발 목록은 다음 단계에서 연결합니다.");
+                setSelectedIssueId(null);
+                setActiveView(item.id);
+                setSelectedId(null);
               }}
             >
               <span className="nav-icon" aria-hidden="true">{item.icon}</span>
@@ -956,10 +947,7 @@ export default function DevelopmentManager() {
           </div>
 
           <div className="legend-row">
-            <span><i className="business" />사업</span>
-            <span><i className="development" />개발</span>
-            <span><i className="qa" />품질</span>
-            <span><i className="deploy" />배포</span>
+            {timelineStages.map(stage => <span key={stage.type}><i className={stage.type} />{stage.label}</span>)}
             <em>총 {filtered.length}건</em>
           </div>
 
@@ -1264,7 +1252,7 @@ function IssueForm({ issue, onClose, onSave }: {
         </div>
         <footer>
           <button type="button" disabled={saving} onClick={onClose}>취소</button>
-          <button className="solid" disabled={!title.trim() || saving}>{saving ? "저장 중..." : issue ? "수정 저장" : "등록"}</button>
+          <button className="solid" disabled={!title.trim() || saving}>{saving ? "저장 중..." : issue ? "저장" : "등록"}</button>
         </footer>
       </form>
     </div>
@@ -1350,60 +1338,6 @@ function MultiFilterSelect<T extends string>({ label, allLabel, values, onChange
   );
 }
 
-function TimelineRow({ item, month, daysCount, today, selected, onSelect }: { item: Development; month: Date; daysCount: number; today: Date; selected: boolean; onSelect: () => void }) {
-  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
-  const monthEnd = new Date(month.getFullYear(), month.getMonth(), daysCount);
-  const periods = scheduledPeriods(item);
-  const position = (phase: { start: string; end: string }) => {
-    const rawStart = new Date(`${phase.start}T00:00:00`);
-    const rawEnd = new Date(`${phase.end}T00:00:00`);
-    if (rawEnd < monthStart || rawStart > monthEnd) return null;
-    const visibleStart = rawStart < monthStart ? monthStart : rawStart;
-    const visibleEnd = rawEnd > monthEnd ? monthEnd : rawEnd;
-    const startDay = visibleStart.getDate();
-    const length = Math.round((visibleEnd.getTime() - visibleStart.getTime()) / 86400000) + 1;
-    return { left: `${((startDay - 1) / daysCount) * 100}%`, width: `${(length / daysCount) * 100}%` };
-  };
-  const progress = projectProgress(item);
-  const bars = periods.flatMap(phase => {
-    const style = position(phase);
-    return style ? [{ phase, style }] : [];
-  });
-  const lanes = [...new Set(bars.map(bar => bar.phase.lane))];
-  const laneHeight = 18;
-  const height = Math.max(66, 24 + laneHeight * lanes.length);
-  return (
-    <button style={{ height }} className={`timeline-row ${selected ? "selected" : ""}`} onClick={onSelect}>
-      <div className="task-info">
-        <div className="task-title"><strong>{item.name}</strong><small>{item.code} · {item.customer} · {item.region}</small></div>
-        <div className="task-meta">
-          <span className="mini-avatars">{item.assignees.slice(0, 3).map((name, index) => <i key={name} style={{ zIndex: 3 - index }} title={name}>{name.slice(0, 1)}</i>)}</span>
-          <span className="timeline-percent"><progress aria-label="공정률" value={progress} max={100} /><b>{progress}%</b></span>
-        </div>
-      </div>
-      <div className="timeline-track">
-        <div className="day-lines">{Array.from({ length: daysCount }).map((_, index) => {
-          const date = new Date(month.getFullYear(), month.getMonth(), index + 1);
-          return <i key={index} className={date.getDay() === 0 || date.getDay() === 6 ? "weekend" : ""} />;
-        })}</div>
-        {month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth() && <span className="today-line" style={{ left: `${((today.getDate() - 0.5) / daysCount) * 100}%` }} />}
-        {bars.map(({ phase, style }) => (
-          <span key={phase.id} className={`phase-bar ${phase.type.toLowerCase()}`}
-            style={{ ...style, top: (height - (lanes.length - 1) * laneHeight) / 2 + lanes.indexOf(phase.lane) * laneHeight }}
-            title={`${phase.label} · ${phaseMeta[phase.type].label} ${phase.start} ~ ${phase.end}`}>
-            <i style={{ width: "100%" }} /><em>{phaseMeta[phase.type].short}</em>
-          </span>
-        ))}
-        {item.deploymentDate && (() => {
-          const deployment = new Date(`${item.deploymentDate}T00:00:00`);
-          if (deployment < monthStart || deployment > monthEnd) return null;
-          return <span className="deploy-marker" style={{ left: `${((deployment.getDate() - 0.5) / daysCount) * 100}%` }} title={`배포 ${item.deploymentDate}`}>◆</span>;
-        })()}
-      </div>
-    </button>
-  );
-}
-
 function ProjectProgress({ value }: { value: number }) {
   return <div className="project-progress"><span>공정률</span><progress aria-label="프로젝트 공정률" max={100} value={value} /><strong>{value}%</strong></div>;
 }
@@ -1476,7 +1410,6 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
       category: item?.category ?? "프로젝트" as Development["category"],
       assignee: item?.assignees.join(", ") ?? "담당자",
       summary: item?.summary ?? "",
-      deploymentDate: item?.deploymentDate ?? "",
     };
   });
 
@@ -1486,13 +1419,16 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
   const [effort, setEffort] = useState<Effort>(() => item?.effort ?? emptyEffort());
   const firmware = rows.map(fw => ({ ...fw, version: fw.version.trim(), region: fw.region.trim() }))
     .filter(fw => item?.firmware.some(old => old.id === fw.id) ||
-      fw.region || fw.kind || fw.version || fw.devStart || fw.devEnd || fw.qaStart || fw.qaEnd || fw.status !== "대기중");
+      fw.region || fw.kind || fw.version || firmwareStages.some(stage => fw[stage.start] || fw[stage.end]) || fw.status !== "대기중");
+  const deploymentDate = deploymentAfterQuality(firmware);
   const progress = projectProgress({ id: item?.id ?? "", status: item?.status ?? "대기중", phases: item?.phases ?? [], firmware, effort });
   const buildDevelopment = () => {
     for (const [index, fw] of firmware.entries()) {
-      for (const [label, start, end] of [["개발", fw.devStart, fw.devEnd], ["품질", fw.qaStart, fw.qaEnd]]) {
+      for (const stage of firmwareStages) {
+        const start = fw[stage.start];
+        const end = fw[stage.end];
         if (Boolean(start) !== Boolean(end) || start > end) {
-          setFormError(`FW ${index + 1}행의 ${label} 시작일과 종료일을 확인해주세요.`);
+          setFormError(`FW ${index + 1}행의 ${stage.label} 시작일과 종료일을 확인해주세요.`);
           return null;
         }
       }
@@ -1510,7 +1446,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
       requirements: requirements.filter(r => item?.requirements.some(old => old.id === r.id) ||
         r.kind.trim() || r.detail.trim() || r.reason.trim() || r.scheduledOn || r.status !== "자료요청"),
       assignees: form.assignee.split(",").map((name) => name.trim()).filter(Boolean),
-      deploymentDate: form.deploymentDate || undefined,
+      deploymentDate,
       phases: item?.phases ?? [],
       firmware,
       effort,
@@ -1553,7 +1489,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
             <label>고객사 <input value={form.customer} onChange={(e) => set("customer", e.target.value)} /></label>
             <label>지역 <input required value={form.region} onChange={(e) => set("region", e.target.value)} placeholder="예: 부산" /></label>
             <label>개발 구분 <select value={form.category} onChange={(e) => set("category", e.target.value)}><option>프로젝트</option><option>유지보수</option></select></label>
-            <label>배포 일정 <input type="date" value={form.deploymentDate} onInput={(e) => set("deploymentDate", e.currentTarget.value)} /></label>
+            <label>배포 일정 <input readOnly value={deploymentDate ?? "미정"} aria-label="배포 일정" /><small>마지막 품질 종료일의 다음 평일에 자동 산정</small></label>
             <label className="wide">담당자 <input value={form.assignee} onChange={(e) => set("assignee", e.target.value)} placeholder="여러 명은 쉼표로 구분" /><small>여러 명은 쉼표(,)로 구분하세요.</small></label>
           </div></fieldset>
           <div className="project-main">
@@ -1566,7 +1502,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
             {formError && <p className="form-error" role="alert">{formError}</p>}
           </div>
         </div>
-        <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : isEditing ? "수정 저장" : "개발 건 등록"}</button></footer>
+        <footer><button type="button" onClick={onClose}>취소</button><button className="solid" disabled={saving}>{saving ? "저장 중..." : isEditing ? "저장" : "개발 건 등록"}</button></footer>
       </form>
       {pendingDevelopment && scheduleConflicts.length > 0 && (
         <div className="conflict-backdrop">
@@ -1583,7 +1519,7 @@ function DevelopmentForm({ item, items, onClose, onSave }: { item: Development |
             </div>
             <footer>
               <button type="button" onClick={() => { setPendingDevelopment(null); setScheduleConflicts([]); }}>일정 다시 확인</button>
-              <button type="button" className="solid warning" disabled={saving} onClick={saveWithConflicts}>{saving ? "저장 중..." : isEditing ? "그래도 수정" : "그래도 등록"}</button>
+              <button type="button" className="solid warning" disabled={saving} onClick={saveWithConflicts}>{saving ? "저장 중..." : isEditing ? "그래도 저장" : "그래도 등록"}</button>
             </footer>
           </section>
         </div>
