@@ -9,6 +9,7 @@ export type DevelopmentStatus =
 export interface Phase {
   id: string;
   type: PhaseType;
+  memo?: string;
   start: string;
   end: string;
   md: number;
