@@ -14,6 +14,7 @@
 - 진행 중·완료·지연 건수 자동 집계
 - `품질진행` FW 선택 및 품질 테스트 우선순위 관리
 - 우선순위 카드 마우스 드래그 정렬 및 저장
+- 이슈사항 상세 조회·수정 및 날짜별 활동기록 등록
 - 배포 예정일 표시
 - 확인창을 거친 개발 건 삭제
 - CSV 내보내기
@@ -38,6 +39,7 @@ npm run dev
 2. 신규 프로젝트는 SQL Editor에서 `supabase/schema.sql` 전체를 실행합니다.
    기존 v0.3 DB는 먼저 `supabase/migrations/20260810_qa_priority.sql`을 실행합니다.
    신규 및 기존 DB 모두 앱 배포 직전에 `supabase/migrations/20261124_firmware.sql`을 실행합니다. 전환 중에는 기존 화면에서 일정·우선순위 수정을 잠시 중단합니다.
+   이슈 활동기록은 신규 및 기존 DB 모두 `supabase/migrations/20261124060659_issue_activities.sql`을 실행해 추가합니다.
 3. Authentication의 Users 메뉴에서 사용할 이메일 계정을 만듭니다.
 4. `.env.example`을 `.env.local`로 복사하고 값을 입력합니다.
 
