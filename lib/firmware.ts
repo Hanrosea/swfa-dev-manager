@@ -9,6 +9,10 @@ export function emptyEffort(): Effort {
   return { management: 0, design: 0, development: 0, quality: 0, deployment: 0, execution: 0 };
 }
 
+export function totalEffort(effort: Effort) {
+  return Number(Object.values(effort).reduce((sum, value) => sum + value, 0).toFixed(2));
+}
+
 export function emptyRequirement(id: string): Requirement {
   return { id, kind: "", detail: "", reason: "", scheduledOn: "", status: "자료요청" };
 }

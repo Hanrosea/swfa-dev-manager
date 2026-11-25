@@ -7,10 +7,6 @@ export const statusOptions: DevelopmentStatus[] = ["대기중", "개발진행", 
 const effortKeys = Object.keys(effortLabels) as (keyof Effort)[];
 const headings = ["NO", "지역", "구분", "FW 버전", ...firmwareStages.map(stage => stage.label + "일정"), "진행사항"];
 
-export function totalEffort(effort: Effort) {
-  return Number(Object.values(effort).reduce((sum, value) => sum + value, 0).toFixed(2));
-}
-
 function DatePair({ fw, stage, number, onChange }: {
   fw: Firmware; stage: FirmwareStage; number: number; onChange: (patch: Partial<Firmware>) => void;
 }) {

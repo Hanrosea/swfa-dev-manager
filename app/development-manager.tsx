@@ -2,8 +2,9 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary, totalEffort } from "./firmware-fields";
-import { projectProgress, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary } from "./firmware-fields";
+import { projectProgress, totalEffort, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
+import { dashboardCalendar, dashboardEntry, localDate, visiblePeriods, type DashboardView } from "@/lib/dashboard-schedule";
 import { deploymentAfterQuality, firmwareStages, scheduledPeriods, timelineStages } from "@/lib/schedule";
 import { TimelineRow } from "./schedule-timeline";
 import { RequirementTable } from "./requirement-table";
@@ -61,13 +62,6 @@ const menuItems = [
   { id: "priority", label: "우선 순위", icon: "↕" },
   { id: "issues", label: "이슈사항", icon: "!" },
 ] as const;
-
-function localDate(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 function formatShortDate(value?: string) {
   if (!value) return "-";
@@ -209,6 +203,9 @@ export default function DevelopmentManager() {
     const current = new Date();
     return new Date(current.getFullYear(), current.getMonth(), 1);
   });
+  const [scheduleView, setScheduleView] = useState<DashboardView>("month");
+  const [includeUndated, setIncludeUndated] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [query, setQuery] = useState("");
   const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
@@ -399,9 +396,28 @@ export default function DevelopmentManager() {
     [items],
   );
 
+  const today = localDate(new Date());
+  const calendar = useMemo(() => dashboardCalendar(month, scheduleView, today), [month, scheduleView, today]);
+  const schedules = useMemo(() => items.map(dashboardEntry), [items]);
+  const selectedYear = month.getFullYear();
+  const currentYear = Number(today.slice(0, 4));
+  const years = useMemo(() => {
+    const values = new Set([selectedYear, currentYear]);
+    for (const { stages, business } of schedules) {
+      for (const period of [...stages, ...business.periods]) {
+        values.add(Number(period.start.slice(0, 4)));
+        if (period.end) values.add(Number(period.end.slice(0, 4)));
+      }
+    }
+    const first = Math.max(1000, Math.min(currentYear - 5, ...values) - 1);
+    const last = Math.min(9999, Math.max(currentYear + 5, ...values) + 1);
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  }, [schedules, selectedYear, currentYear]);
+  const periodRows = useMemo(() => schedules.map(entry => ({ ...entry, bars: visiblePeriods(entry, calendar) }))
+    .filter(entry => entry.bars.length || (includeUndated && entry.undated)), [schedules, calendar, includeUndated]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return items.filter((item) => {
+    return periodRows.filter(({ item, progress }) => {
       const matchesQuery =
         !normalized ||
         [item.name, item.code, item.customer, item.region, ...item.assignees, ...item.firmware.flatMap(fw => [fw.region, fw.kind, fw.version])]
@@ -412,34 +428,38 @@ export default function DevelopmentManager() {
         matchesQuery &&
         (!categoryFilters.length || categoryFilters.includes(item.category)) &&
         (!assigneeFilters.length || item.assignees.some((name) => assigneeFilters.includes(name))) &&
-        (!progressFilters.length || progressFilters.includes(projectProgress(item) === 100 ? "완료" : "진행중"))
+        (!progressFilters.length || progressFilters.includes(progress === 100 ? "완료" : "진행중"))
       );
     });
-  }, [items, query, categoryFilters, assigneeFilters, progressFilters]);
+  }, [periodRows, query, categoryFilters, assigneeFilters, progressFilters]);
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
-  const daysCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
-  const days = Array.from({ length: daysCount }, (_, index) => index + 1);
-  const today = new Date();
-  const isCurrentMonth =
-    month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth();
-  const progressValues = items.map(projectProgress);
-  const completedCount = progressValues.filter(percent => percent === 100).length;
-  const activeCount = items.length - completedCount;
-  const delayedCount = items.filter((item) => {
+  const undatedCount = schedules.filter(entry => entry.undated).length;
+  const completedCount = periodRows.filter(entry => entry.progress === 100).length;
+  const activeCount = periodRows.length - completedCount;
+  const delayedCount = periodRows.filter(({item, progress}) => {
     const end = scheduleBounds(item).end;
-    return (
-      end &&
-      end < localDate(today) &&
-      projectProgress(item) < 100
-    );
+    return end && end < today && progress < 100;
   }).length;
 
-  const changeMonth = (offset: number) => {
-    setMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  const annual = scheduleView === "year";
+  const changePeriod = (offset: number) => {
+    setMonth(current => new Date(current.getFullYear(), current.getMonth() + (annual ? 12 : 1) * offset, 1));
   };
 
   const showMessage = (message: string) => setToast(message);
+
+  const downloadSchedule = async () => {
+    setExporting(true);
+    try {
+      const { exportSchedule } = await import("@/lib/export-schedule");
+      await exportSchedule(filtered, calendar.start.slice(0, annual ? 4 : 7));
+    } catch {
+      showMessage("엑셀 파일을 만들지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const storeReadNotificationIds = (ids: string[]) => {
     const nextIds = Array.from(new Set(ids)).slice(0, 200);
@@ -919,7 +939,7 @@ export default function DevelopmentManager() {
 
         {activeView === "dashboard" ? <>
           <section className="stat-grid" aria-label="일정 요약">
-            <StatCard label="전체 개발" value={items.length} helper="등록된 개발 건" tone="navy" icon="▦" />
+            <StatCard label="전체 개발" value={periodRows.length} helper="조회 기간 기준" tone="navy" icon="▦" />
             <StatCard label="진행중" value={activeCount} helper="건 수" tone="blue" icon="▶" />
             <StatCard label="완료" value={completedCount} helper="건 수" tone="green" icon="✓" />
             <StatCard label="지연" value={delayedCount} helper="건 수" tone="red" icon="↗" />
@@ -928,16 +948,30 @@ export default function DevelopmentManager() {
           <section className="schedule-card">
           <div className="schedule-toolbar">
             <div className="month-control">
-              <button onClick={() => changeMonth(-1)} aria-label="이전 달">‹</button>
-              <strong>{month.getFullYear()}년 {month.getMonth() + 1}월</strong>
-              <button onClick={() => changeMonth(1)} aria-label="다음 달">›</button>
+              <button onClick={() => changePeriod(-1)} aria-label={annual ? "이전 연도" : "이전 달"}
+                disabled={calendar.start === "1000-01-01"}>‹</button>
+              <select aria-label="조회 연도" value={selectedYear} onChange={event => setMonth(new Date(Number(event.target.value), month.getMonth(), 1))}>
+                {years.map(year => <option key={year} value={year}>{year}년</option>)}
+              </select>
+              {!annual && <select aria-label="조회 월" value={month.getMonth() + 1}
+                onChange={event => setMonth(new Date(selectedYear, Number(event.target.value) - 1, 1))}>
+                {Array.from({ length: 12 }, (_, index) => <option key={index} value={index + 1}>{index + 1}월</option>)}
+              </select>}
+              <button onClick={() => changePeriod(1)} aria-label={annual ? "다음 연도" : "다음 달"}
+                disabled={calendar.end === "9999-12-31"}>›</button>
               <button className="today-button" onClick={() => {
                 const current = new Date();
                 setMonth(new Date(current.getFullYear(), current.getMonth(), 1));
               }}>오늘</button>
             </div>
-            <div className="view-switch" aria-label="보기 방식">
-              <button className="active">월간</button><button onClick={() => showMessage("분기 보기는 2차 범위입니다.")}>분기</button>
+            <div className="schedule-actions">
+              <div className="view-switch" role="group" aria-label="보기 방식">
+                <button aria-pressed={annual} className={annual ? "active" : ""} onClick={() => setScheduleView("year")}>연간</button>
+                <button aria-pressed={!annual} className={!annual ? "active" : ""} onClick={() => setScheduleView("month")}>월간</button>
+              </div>
+              <button type="button" className="schedule-export" disabled={exporting} onClick={downloadSchedule}>
+                {exporting ? "내보내는 중…" : "엑셀로 내보내기"}
+              </button>
             </div>
           </div>
 
@@ -950,30 +984,35 @@ export default function DevelopmentManager() {
             <MultiFilterSelect label="구분" allLabel="전체 구분" values={categoryFilters} onChange={setCategoryFilters} options={["프로젝트", "유지보수"]} />
             <MultiFilterSelect label="담당자" allLabel="전체 담당자" values={assigneeFilters} onChange={setAssigneeFilters} options={assignees} />
             <MultiFilterSelect label="진행상태" values={progressFilters} onChange={setProgressFilters} options={progressStates} />
+            {undatedCount > 0 && <label className="undated-filter">
+              <input type="checkbox" checked={includeUndated} onChange={event => setIncludeUndated(event.target.checked)} />
+              일정 미정 포함
+            </label>}
           </div>
 
           <div className="legend-row">
+            {filtered.some(entry => entry.bars.some(bar => bar.type === "business")) &&
+              <span><i className="business" />사업기간</span>}
             {timelineStages.map(stage => <span key={stage.type}><i className={stage.type} />{stage.label}</span>)}
             <em>총 {filtered.length}건</em>
           </div>
 
           <div className="gantt-scroll">
-            <div className="gantt" style={{ "--day-count": daysCount } as React.CSSProperties}>
+            <div className={`gantt ${annual ? "gantt-year" : ""}`} style={{ "--day-count": calendar.columns.length,
+              "--calendar-columns": calendar.columns.map(column => column.days + "fr").join(" ") } as React.CSSProperties}>
               <div className="gantt-calendar-head">
                 <div className="gantt-head sticky-info">
                   <span>개발 업무</span><span>담당 / 공정률</span>
                 </div>
                 <div className="day-heads">
-                  {days.map((day) => {
-                    const date = new Date(month.getFullYear(), month.getMonth(), day);
-                    const weekend = date.getDay() === 0 || date.getDay() === 6;
-                    const current = isCurrentMonth && day === today.getDate();
-                    return <span key={day} className={`${weekend ? "weekend" : ""} ${current ? "today" : ""}`}><small>{["일", "월", "화", "수", "목", "금", "토"][date.getDay()]}</small>{day}</span>;
-                  })}
+                  {calendar.columns.map(column => <span key={column.label} className={`${column.weekend ? "weekend" : ""} ${column.current ? "today" : ""}`}>
+                    {column.weekday && <small>{column.weekday}</small>}{column.label}
+                  </span>)}
                 </div>
               </div>
-              {filtered.length ? filtered.map((item) => (
-                <TimelineRow key={item.id} item={item} month={month} daysCount={daysCount} today={today} selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
+              {filtered.length ? filtered.map(({item, bars, progress}) => (
+                <TimelineRow key={item.id} item={item} progress={progress} periods={bars} calendar={calendar}
+                  selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
               )) : (
                 <div className="empty-row">조건에 맞는 개발 건이 없습니다. 필터를 다시 확인해주세요.</div>
               )}
