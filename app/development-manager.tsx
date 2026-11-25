@@ -176,7 +176,7 @@ function mapDatabaseRow(row: Record<string, unknown>): Development {
     assignees: (row.assignee_names as string[] | null) ?? [],
     deploymentDate: row.deployment_date ? String(row.deployment_date) : undefined,
     updatedAt: String(row.updated_at ?? new Date().toISOString()),
-    effort: row.effort_md as Effort,
+    effort: { ...emptyEffort(), ...(row.effort_md as Partial<Effort>) },
     firmware: rows.slice().sort((a, b) => Number(a.row_no) - Number(b.row_no)).map(fw => ({
       id: String(fw.id), region: String(fw.region), kind: fw.kind as Firmware["kind"], version: String(fw.version),
       designStart: String(fw.design_start ?? ""), designEnd: String(fw.design_end ?? ""),

@@ -52,6 +52,7 @@ export const effortLabels = {
   design: "분석 및 설계",
   development: "개발",
   quality: "품질 테스트",
+  deployment: "배포",
   execution: "사업 수행",
 } as const;
 export type Effort = Record<keyof typeof effortLabels, number>;
