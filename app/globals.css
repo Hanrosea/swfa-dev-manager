@@ -341,7 +341,25 @@ button { color: inherit; }
 .dashboard-workspace .task-title strong { font-size: var(--item-font); }
 .dashboard-workspace :is(.primary-button,.empty-row) { font-size: var(--body-font); }
 .dashboard-workspace .stat-card strong { font-size: 26px; }
-.dashboard-workspace .month-control strong { font-size: 18px; }
+.dashboard-workspace .month-control select {
+  height: 32px; padding: 0 6px; border: 1px solid #d7dee8; border-radius: 6px;
+  background: white; color: #30415a; font: inherit; font-size: var(--body-font); font-weight: 600; cursor: pointer;
+}
+.schedule-actions { display: flex; align-items: center; gap: 10px; }
+.schedule-export {
+  min-height: 32px; padding: 3px 12px; border: 1px solid #b4d2c1; border-radius: 6px;
+  background: #f5fbf7; color: #286047; font: inherit; font-size: var(--meta-font); font-weight: 600; cursor: pointer;
+}
+.schedule-export:hover { background: #eaf5ee; }
+.schedule-export:disabled { opacity: .65; cursor: wait; }
+.undated-filter { display: inline-flex; align-items: center; gap: 5px; color: #52627a; font-size: var(--meta-font); white-space: nowrap; cursor: pointer; }
+.undated-filter input { accent-color: #3974cf; }
+.dashboard-workspace .legend-row { height: auto; min-height: 37px; flex-wrap: wrap; gap: 5px 13px; padding-block: 6px; }
+.legend-row i.business { background: #8594a8; }
+.phase-bar.business { color: #31465e; background: #dbe3ed; box-shadow: inset 0 0 0 1px #aab8c8; }
+.gantt-year .phase-bar { min-width: 2px; padding-inline: 0; }
+.dashboard-workspace .gantt-year .day-heads span.today:after { content: "이번 달"; white-space: nowrap; }
+.dashboard-workspace :is(.day-heads,.day-lines) { grid-template-columns: var(--calendar-columns); }
 .dashboard-workspace .task-title small { font-size: var(--meta-font); }
 .dashboard-workspace :is(.day-heads span small,.mini-avatars i) { font-size: 12px; }
 .dashboard-workspace .day-heads span.today:after { font-size: 10.5px; }
@@ -376,6 +394,8 @@ button { color: inherit; }
 .timeline-percent { display: flex; align-items: center; gap: 6px; color: #36587f; font-size: 15px; font-variant-numeric: tabular-nums; }
 .timeline-percent progress { width: 100%; flex: 1; }
 @media (max-width: 760px) {
+  .schedule-actions { gap: 8px; }
+  .dashboard-workspace .schedule-toolbar { flex-wrap: wrap; gap: 8px; }
   .project-columns { grid-template-columns: minmax(0,1fr); align-content: start; }
   .project-columns .project-basics { border-right: 0; border-bottom: 1px solid #dbe2eb; }
   .dashboard-workspace { --calendar-info: min(67vw, 380px); }

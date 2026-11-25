@@ -1,15 +1,13 @@
 import { useState, type ReactNode } from "react";
-import { projectProgress } from "@/lib/firmware";
-import { firmwarePeriods, scheduledPeriods, type SchedulePeriod } from "@/lib/schedule";
+import { dayNumber, overlaps, type DashboardCalendar, type TimelinePeriod } from "@/lib/dashboard-schedule";
+import { firmwarePeriods } from "@/lib/schedule";
 import type { Development } from "@/lib/types";
 
-type Calendar = { month: Date; daysCount: number; today: Date };
-
-function layoutPeriods(periods: SchedulePeriod[], firstDate: string, lastDate: string) {
-  const visible = periods.filter(p => p.start <= lastDate && firstDate <= p.end).map(period => ({
+function layoutPeriods(periods: TimelinePeriod[], calendar: DashboardCalendar) {
+  const visible = periods.filter(period => overlaps(period, calendar)).map(period => ({
     period,
-    first: Number((period.start < firstDate ? firstDate : period.start).slice(-2)),
-    last: Number((period.end > lastDate ? lastDate : period.end).slice(-2)),
+    first: Math.max(0, dayNumber(period.start) - calendar.firstDay),
+    last: Math.min(calendar.numberOfDays - 1, dayNumber(period.end || calendar.end) - calendar.firstDay),
   })).sort((a, b) => a.first - b.first || a.last - b.last);
 
   const laneEnds: number[] = [];
@@ -22,25 +20,20 @@ function layoutPeriods(periods: SchedulePeriod[], firstDate: string, lastDate: s
   return { bars, laneCount: laneEnds.length };
 }
 
-function ChartRow({ month, daysCount, today, periods, children, label, selected, onSelect }: Calendar & {
-  periods: SchedulePeriod[]; children: ReactNode; label: string; selected?: boolean; onSelect?: () => void;
+function ChartRow({ calendar, periods, children, label, selected, onSelect }: {
+  calendar: DashboardCalendar; periods: TimelinePeriod[]; children: ReactNode; label: string; selected?: boolean; onSelect?: () => void;
 }) {
-  const year = month.getFullYear();
-  const m = month.getMonth();
-  const prefix = `${year}-${String(m + 1).padStart(2, "0")}-`;
-  const { bars, laneCount } = layoutPeriods(periods, prefix + "01", prefix + daysCount);
+  const { bars, laneCount } = layoutPeriods(periods, calendar);
   const laneHeight = 21;
   const track = <>
-    <span className="day-lines" aria-hidden="true">{Array.from({ length: daysCount }, (_, i) => {
-      const weekday = new Date(year, m, i + 1).getDay();
-      return <i key={i} className={weekday === 0 || weekday === 6 ? "weekend" : undefined} />;
-    })}</span>
-    {year === today.getFullYear() && m === today.getMonth() &&
-      <span aria-hidden="true" className="today-line" style={{ left: `${(today.getDate() - 0.5) * 100 / daysCount}%` }} />}
+    <span className="day-lines" aria-hidden="true">{calendar.columns.map(column =>
+      <i key={column.label} className={column.weekend ? "weekend" : undefined} />)}</span>
+    {calendar.todayPosition !== undefined &&
+      <span aria-hidden="true" className="today-line" style={{ left: `${calendar.todayPosition * 100}%` }} />}
     {bars.map(({ period, first, last, lane }) => {
-      const dates = period.start === period.end ? period.start : `${period.start} ~ ${period.end}`;
+      const dates = period.start === period.end ? period.start : `${period.start} ~ ${period.end || "종료 미정"}`;
       return <span key={period.type + period.start} className={`phase-bar ${period.type}`}
-        style={{ left: `${(first - 1) * 100 / daysCount}%`, width: `${(last - first + 1) * 100 / daysCount}%`,
+        style={{ left: `${first * 100 / calendar.numberOfDays}%`, width: `${(last - first + 1) * 100 / calendar.numberOfDays}%`,
           top: `calc(50% + ${(lane - (laneCount - 1) / 2) * laneHeight}px)` }}
         title={`${period.label} · ${dates}`}>{period.label}</span>;
     })}
@@ -54,14 +47,13 @@ function ChartRow({ month, daysCount, today, periods, children, label, selected,
   </div>;
 }
 
-export function TimelineRow({ item, selected, onSelect, ...calendar }: Calendar & {
-  item: Development; selected: boolean; onSelect: () => void;
+export function TimelineRow({ item, progress, periods, calendar, selected, onSelect }: {
+  item: Development; progress: number; periods: TimelinePeriod[]; calendar: DashboardCalendar; selected: boolean; onSelect: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = "firmware-schedules-" + item.id;
-  const progress = projectProgress(item);
   return <>
-    <ChartRow {...calendar} periods={scheduledPeriods(item)} selected={selected} onSelect={onSelect} label={item.name}>
+    <ChartRow calendar={calendar} periods={periods} selected={selected} onSelect={onSelect} label={item.name}>
       <div className="task-info project-info">
         <button type="button" className="project-row-open" onClick={onSelect} aria-label={item.name + " 상세 보기"}>
           <span className="task-title"><strong title={item.name}>{item.name}</strong>
@@ -83,7 +75,7 @@ export function TimelineRow({ item, selected, onSelect, ...calendar }: Calendar 
         const label = `FW ${index + 1}`;
         const dates = firmwarePeriods(fw);
         const name = [label, fw.region, fw.kind, fw.version].filter(Boolean).join(" · ");
-        return <ChartRow key={fw.id} {...calendar} periods={dates} label={name}>
+        return <ChartRow key={fw.id} calendar={calendar} periods={dates} label={name}>
           <div className="task-info firmware-info">
             <div className="fw-timeline-name"><strong>{name}</strong><span>{fw.status}</span></div>
             <div className="fw-timeline-dates">{dates.length ? dates.map(period =>
