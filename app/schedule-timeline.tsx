@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { dayNumber, overlaps, type DashboardCalendar, type TimelinePeriod } from "@/lib/dashboard-schedule";
+import { dayNumber, overlaps, type BusinessPeriod, type DashboardCalendar, type TimelinePeriod } from "@/lib/dashboard-schedule";
 import { firmwarePeriods } from "@/lib/schedule";
 import type { Development } from "@/lib/types";
 
@@ -10,16 +10,14 @@ function layoutPeriods(periods: TimelinePeriod[], calendar: DashboardCalendar) {
     last: Math.min(calendar.numberOfDays - 1, dayNumber(period.end) - calendar.firstDay),
   })).sort((a, b) => a.first - b.first || a.last - b.last);
 
-  const firstStageLane = visible.some(bar => bar.period.type === "business") ? 1 : 0;
-  const stageLaneEnds: number[] = [];
+  const laneEnds: number[] = [];
   const bars = visible.map(bar => {
-    if (bar.period.type === "business") return { ...bar, lane: 0 };
-    const free = stageLaneEnds.findIndex(end => end < bar.first);
-    const lane = free === -1 ? stageLaneEnds.length : free;
-    stageLaneEnds[lane] = bar.last;
-    return { ...bar, lane: firstStageLane + lane };
+    const free = laneEnds.findIndex(end => end < bar.first);
+    const lane = free === -1 ? laneEnds.length : free;
+    laneEnds[lane] = bar.last;
+    return { ...bar, lane };
   });
-  return { bars, laneCount: firstStageLane + stageLaneEnds.length };
+  return { bars, laneCount: laneEnds.length };
 }
 
 function ChartRow({ calendar, periods, children, label, selected, onSelect }: {
@@ -50,13 +48,13 @@ function ChartRow({ calendar, periods, children, label, selected, onSelect }: {
   </div>;
 }
 
-export function TimelineRow({ item, progress, periods, calendar, selected, onSelect }: {
-  item: Development; progress: number; periods: TimelinePeriod[]; calendar: DashboardCalendar; selected: boolean; onSelect: () => void;
+export function TimelineRow({ item, progress, businessPeriod, calendar, selected, onSelect }: {
+  item: Development; progress: number; businessPeriod?: BusinessPeriod; calendar: DashboardCalendar; selected: boolean; onSelect: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = "firmware-schedules-" + item.id;
   return <>
-    <ChartRow calendar={calendar} periods={periods} selected={selected} onSelect={onSelect} label={item.name}>
+    <ChartRow calendar={calendar} periods={businessPeriod ? [businessPeriod] : []} selected={selected} onSelect={onSelect} label={item.name}>
       <div className="task-info project-info">
         <button type="button" className="project-row-open" onClick={onSelect} aria-label={item.name + " 상세 보기"}>
           <span className="task-title"><strong title={item.name}>{item.name}</strong>
