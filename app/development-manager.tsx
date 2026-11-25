@@ -8,6 +8,7 @@ import { deploymentAfterQuality, firmwareStages, scheduledPeriods, timelineStage
 import { TimelineRow } from "./schedule-timeline";
 import { RequirementTable } from "./requirement-table";
 import { IssueDetail } from "./issue-detail";
+import { PasswordDialog } from "./password-dialog";
 import { issueActivityKey, issueColumns, mapIssue, type Issue, type IssueSeverity, type IssueStatus } from "@/lib/issues";
 import { initialDevelopments } from "@/lib/mock-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
@@ -220,6 +221,7 @@ export default function DevelopmentManager() {
   const [localReady, setLocalReady] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [passwordAccountId, setPasswordAccountId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "priority" | "issues">("dashboard");
   const [priorityIds, setPriorityIds] = useState<string[]>([]);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
@@ -342,6 +344,7 @@ export default function DevelopmentManager() {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUserEmail(session?.user.email ?? null);
       setUserId(session?.user.id ?? null);
+      setPasswordAccountId(id => id === session?.user.id ? id : null);
     });
     return () => {
       mounted = false;
@@ -862,7 +865,8 @@ export default function DevelopmentManager() {
               <span className="avatar">{(userEmail ?? "조준우").slice(0, 1).toUpperCase()}</span>
               <div><strong>{userEmail ? userEmail.split("@")[0] : "조준우"}</strong><small>PM / 매니저</small></div>
             </div>
-            <button className="settings-button" onClick={() => showMessage("관리자 설정은 다음 단계에서 연결합니다.")}>⚙</button>
+            {userId && <button type="button" className="settings-button password-shortcut" aria-haspopup="dialog"
+              onClick={() => setPasswordAccountId(userId)}>비밀번호 변경</button>}
           </div>
         </div>
       </aside>
@@ -874,6 +878,8 @@ export default function DevelopmentManager() {
             <h1>{activeView === "priority" ? "우선 순위" : activeView === "issues" ? "이슈사항" : "개발 일정 대시보드"}</h1>
           </div>
           <div className="top-actions">
+            {userId && <button type="button" className="password-shortcut compact-password-shortcut" aria-haspopup="dialog"
+              onClick={() => setPasswordAccountId(userId)}>비밀번호 변경</button>}
             <span className={`mode-pill ${isSupabaseConfigured ? "db" : "demo"}`}>
               <i /> {isSupabaseConfigured ? "DB 연결" : "데모 모드"}
             </span>
@@ -1029,6 +1035,10 @@ export default function DevelopmentManager() {
           onClose={() => setShowIssueForm(false)}
           onSave={saveIssue}
         />
+      )}
+      {userEmail && userId && passwordAccountId === userId && (
+        <PasswordDialog key={userId} userId={userId} email={userEmail} onClose={() => setPasswordAccountId(null)}
+          onSaved={() => { setPasswordAccountId(null); showMessage("비밀번호를 변경했습니다."); }} />
       )}
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
     </main>
@@ -1545,5 +1555,5 @@ function LoginScreen({ onSuccess }: { onSuccess: (email: string) => void }) {
     }
     setSubmitting(false);
   };
-  return <main className="login-page"><section className="login-brand"><span className="brand-mark large">M</span><p>MYBI INFRA</p><h1>개발의 흐름을<br />한눈에 관리하세요.</h1><small>사업 · 개발 · 품질 일정을 하나의 화면에서 공유합니다.</small></section><form className="login-card" onSubmit={submit}><span>INTERNAL WORKSPACE</span><h2>로그인</h2><p>관리자가 등록한 계정으로 접속해주세요.</p><label>이메일<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" /></label><label>비밀번호<input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호 입력" /></label>{error && <em>{error}</em>}<button disabled={submitting}>{submitting ? "확인 중..." : "로그인"}</button></form></main>;
+  return <main className="login-page"><section className="login-brand"><span className="brand-mark large">M</span><p>MYBI INFRA</p><h1>개발의 흐름을<br />한눈에 관리하세요.</h1><small>사업 · 개발 · 품질 일정을 하나의 화면에서 공유합니다.</small></section><form className="login-card" onSubmit={submit}><span>INTERNAL WORKSPACE</span><h2>로그인</h2><p>관리자가 등록한 계정으로 접속해주세요.</p><label>이메일<input type="email" name="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" /></label><label>비밀번호<input type="password" name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호 입력" /></label>{error && <em>{error}</em>}<button disabled={submitting}>{submitting ? "확인 중..." : "로그인"}</button></form></main>;
 }
