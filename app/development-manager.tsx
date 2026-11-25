@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary } from "./firmware-fields";
 import { projectProgress, totalEffort, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
-import { dashboardCalendar, dashboardEntry, localDate, visiblePeriods, type DashboardView } from "@/lib/dashboard-schedule";
+import { dashboardCalendar, dashboardEntry, localDate, overlaps, type DashboardView } from "@/lib/dashboard-schedule";
 import { deploymentAfterQuality, firmwareStages, scheduledPeriods, timelineStages } from "@/lib/schedule";
 import { TimelineRow } from "./schedule-timeline";
 import { RequirementTable } from "./requirement-table";
@@ -403,8 +403,8 @@ export default function DevelopmentManager() {
   const currentYear = Number(today.slice(0, 4));
   const years = useMemo(() => {
     const values = new Set([selectedYear, currentYear]);
-    for (const { stages, business } of schedules) {
-      for (const period of [...stages, ...business.periods]) {
+    for (const { timelinePeriods, business } of schedules) {
+      for (const period of [...timelinePeriods, ...business.periods]) {
         values.add(Number(period.start.slice(0, 4)));
         if (period.end) values.add(Number(period.end.slice(0, 4)));
       }
@@ -413,8 +413,10 @@ export default function DevelopmentManager() {
     const last = Math.min(9999, Math.max(currentYear + 5, ...values) + 1);
     return Array.from({ length: last - first + 1 }, (_, index) => first + index);
   }, [schedules, selectedYear, currentYear]);
-  const periodRows = useMemo(() => schedules.map(entry => ({ ...entry, bars: visiblePeriods(entry, calendar) }))
-    .filter(entry => entry.bars.length || (includeUndated && entry.undated)), [schedules, calendar, includeUndated]);
+  const periodRows = useMemo(() => schedules.map(entry => ({
+    ...entry, bars: entry.timelinePeriods.filter(period => overlaps(period, calendar)),
+  })).filter(entry => entry.bars.length || entry.business.periods.some(period => overlaps(period, calendar)) ||
+    (includeUndated && entry.undated)), [schedules, calendar, includeUndated]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return periodRows.filter(({ item, progress }) => {

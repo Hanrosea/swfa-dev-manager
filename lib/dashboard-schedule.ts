@@ -4,7 +4,8 @@ import type { Development } from "./types";
 
 export type DashboardView = "year" | "month";
 type DateRange = { start: string; end: string };
-export type TimelinePeriod = SchedulePeriod | (DateRange & { type: "business"; label: "사업기간" });
+type BusinessPeriod = DateRange & { type: "business"; label: "사업기간" };
+export type TimelinePeriod = SchedulePeriod | BusinessPeriod;
 
 export function localDate(date: Date) {
   return [String(date.getFullYear()).padStart(4, "0"), String(date.getMonth() + 1).padStart(2, "0"),
@@ -70,30 +71,38 @@ function businessSchedule(summary: string) {
     // A lone end date is a known milestone. A start followed by "~" remains open.
     ranges.push({ start: start || end, end });
   }
-  const periods: TimelinePeriod[] = [];
+  const periods: DateRange[] = [];
   for (const range of ranges.sort((a, b) => a.start.localeCompare(b.start))) {
     const previous = periods.at(-1);
     if (previous && (!previous.end || range.start <= previous.end)) {
       if (!range.end || (previous.end && range.end > previous.end)) previous.end = range.end;
     } else {
-      periods.push({ ...range, type: "business", label: "사업기간" });
+      periods.push(range);
     }
   }
   return { periods, text: source.join("\n") };
 }
 
+function firmwareBusinessPeriod(firmware: Development["firmware"]): BusinessPeriod | undefined {
+  let start = "";
+  let end = "";
+  for (const fw of firmware) {
+    if (fw.designStart && (!start || fw.designStart < start)) start = fw.designStart;
+    if (fw.qaEnd > end) end = fw.qaEnd;
+  }
+  if (start && end && start <= end) return { type: "business", label: "사업기간", start, end };
+}
+
 export function dashboardEntry(item: Development) {
   const business = businessSchedule(item.summary);
   const stages = scheduledPeriods(item);
-  return { item, progress: projectProgress(item), stages, business, undated: !stages.length && !business.periods.length };
+  const businessPeriod = firmwareBusinessPeriod(item.firmware);
+  const timelinePeriods = businessPeriod ? [businessPeriod, ...stages] : stages;
+  return { item, progress: projectProgress(item), stages, business, timelinePeriods,
+    undated: !timelinePeriods.length && !business.periods.length };
 }
 export type DashboardEntry = ReturnType<typeof dashboardEntry>;
 
 export function overlaps(period: DateRange, window: DateRange) {
   return period.start <= window.end && (!period.end || window.start <= period.end);
-}
-
-export function visiblePeriods(entry: DashboardEntry, window: DateRange): TimelinePeriod[] {
-  const stages = entry.stages.filter(period => overlaps(period, window));
-  return stages.length ? stages : entry.business.periods.filter(period => overlaps(period, window));
 }
