@@ -9,7 +9,7 @@
 - 구분·담당자·진행상태 필터 (진행중 0~99%, 완료 100%)
 - 개발 건 상세 패널
 - 신규 개발 등록
-- FW별 지역·구분·버전·설계/개발/품질 기간과 진행사항, 프로젝트별 5개 공수 항목(MD)
+- FW별 지역·구분·버전·설계/개발/품질 기간과 진행사항, 프로젝트별 사업 총괄·설계·개발·품질·배포·사업 수행 공수(MD)
 - FW 단계와 공수를 반영한 프로젝트 공정률
 - 진행 중·완료·지연 건수 자동 집계
 - `품질진행` FW 선택 및 품질 테스트 우선순위 관리
@@ -46,6 +46,8 @@ npm run dev
    2. `supabase/migrations/20261124133802_firmware_schedule_rules.sql`
    3. `supabase/migrations/20261124133830_save_firmware_design_schedule.sql`
    4. `supabase/migrations/20261124133845_align_firmware_release_dates.sql`
+
+   프로젝트 배포 공수는 `supabase/migrations/20261125013449_project_deployment_effort.sql`을 실행해 사업 수행 공수와 별도로 저장합니다.
 
    설계일정은 미정으로 시작하며, 자동 계산으로 교체한 기존 배포일은 `legacy_deployment_date`에 보관합니다.
 3. Authentication의 Users 메뉴에서 사용할 이메일 계정을 만듭니다.

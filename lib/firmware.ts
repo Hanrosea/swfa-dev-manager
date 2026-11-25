@@ -6,7 +6,7 @@ export function emptyFirmware(id: string): Firmware {
 }
 
 export function emptyEffort(): Effort {
-  return { management: 0, design: 0, development: 0, quality: 0, execution: 0 };
+  return { management: 0, design: 0, development: 0, quality: 0, deployment: 0, execution: 0 };
 }
 
 export function emptyRequirement(id: string): Requirement {
@@ -26,13 +26,14 @@ export function withRowStatus(project: Development, change: ProjectRowChange): D
 
 type StoredFirmware = Omit<Firmware, "designStart" | "designEnd"> & Partial<Pick<Firmware, "designStart" | "designEnd">>;
 export type LegacyDevelopment = Omit<Development, "firmware" | "effort" | "requirements">
-  & Partial<Pick<Development, "effort">> & { firmware?: StoredFirmware[]; requirements?: string | Requirement[] | null };
+  & { effort?: Partial<Effort>; firmware?: StoredFirmware[]; requirements?: string | Requirement[] | null };
 
 export function upgradeDevelopment(item: LegacyDevelopment): Development {
   const requirements = Array.isArray(item.requirements) ? item.requirements : legacyRequirements(item.id, item.requirements ?? "");
   const storedRows = item.firmware?.map(fw => ({ ...fw, designStart: fw.designStart ?? "", designEnd: fw.designEnd ?? "" }));
-  if (storedRows && item.effort) {
-    return { ...item, requirements, firmware: storedRows, deploymentDate: deploymentAfterQuality(storedRows), effort: item.effort };
+  const storedEffort = item.effort && { ...emptyEffort(), ...item.effort };
+  if (storedRows && storedEffort) {
+    return { ...item, requirements, firmware: storedRows, deploymentDate: deploymentAfterQuality(storedRows), effort: storedEffort };
   }
   const phases = item.phases ?? [];
   const firmware = { ...emptyFirmware(item.id), region: item.region, status: item.status };
@@ -48,7 +49,7 @@ export function upgradeDevelopment(item: LegacyDevelopment): Development {
     }
   }
   const rows = storedRows ?? [firmware];
-  return { ...item, phases, requirements, firmware: rows, deploymentDate: deploymentAfterQuality(rows), effort: item.effort ?? effort };
+  return { ...item, phases, requirements, firmware: rows, deploymentDate: deploymentAfterQuality(rows), effort: storedEffort ?? effort };
 }
 
 export type PriorityEntry = { project: Development; fw: Firmware };
@@ -77,7 +78,7 @@ export function projectProgress(item: Pick<Development, "id" | "status" | "phase
     const business = fw.status !== "대기중" ? 1 : migrated ? legacy.business : 0;
     const development = fw.status === "품질진행" ? 1 : migrated ? legacy.dev : 0;
     done += (totals.management + totals.design) * business + totals.development * development;
-    if (migrated) done += totals.quality * legacy.qa + totals.execution * legacy.deploy;
+    if (migrated) done += totals.quality * legacy.qa + (totals.deployment + totals.execution) * legacy.deploy;
   }
   return Math.min(99, Math.round(100 * done / (count * total)));
 }
