@@ -4,7 +4,7 @@ import type { Development } from "./types";
 
 export type DashboardView = "year" | "month";
 type DateRange = { start: string; end: string };
-type BusinessPeriod = DateRange & { type: "business"; label: "사업기간" };
+export type BusinessPeriod = DateRange & { type: "business"; label: "사업기간" };
 export type TimelinePeriod = SchedulePeriod | BusinessPeriod;
 
 export function localDate(date: Date) {
@@ -97,9 +97,9 @@ export function dashboardEntry(item: Development) {
   const business = businessSchedule(item.summary);
   const stages = scheduledPeriods(item);
   const businessPeriod = firmwareBusinessPeriod(item.firmware);
-  const timelinePeriods = businessPeriod ? [businessPeriod, ...stages] : stages;
-  return { item, progress: projectProgress(item), stages, business, timelinePeriods,
-    undated: !timelinePeriods.length && !business.periods.length };
+  const dateRanges: DateRange[] = [...stages, ...business.periods];
+  if (businessPeriod) dateRanges.push(businessPeriod);
+  return { item, progress: projectProgress(item), stages, business, businessPeriod, dateRanges, undated: !dateRanges.length };
 }
 export type DashboardEntry = ReturnType<typeof dashboardEntry>;
 

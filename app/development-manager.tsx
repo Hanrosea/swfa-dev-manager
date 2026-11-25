@@ -5,7 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { EffortFields, FirmwareDetails, FirmwareEditor, PrioritySummary } from "./firmware-fields";
 import { projectProgress, totalEffort, emptyEffort, emptyFirmware, emptyRequirement, legacyRequirements, withRowStatus, qualityEntries, upgradeDevelopment, type LegacyDevelopment, type PriorityEntry } from "@/lib/firmware";
 import { dashboardCalendar, dashboardEntry, localDate, overlaps, type DashboardView } from "@/lib/dashboard-schedule";
-import { deploymentAfterQuality, firmwareStages, scheduledPeriods, timelineStages } from "@/lib/schedule";
+import { deploymentAfterQuality, firmwareStages, scheduledPeriods } from "@/lib/schedule";
 import { TimelineRow } from "./schedule-timeline";
 import { RequirementTable } from "./requirement-table";
 import { IssueDetail } from "./issue-detail";
@@ -403,8 +403,8 @@ export default function DevelopmentManager() {
   const currentYear = Number(today.slice(0, 4));
   const years = useMemo(() => {
     const values = new Set([selectedYear, currentYear]);
-    for (const { timelinePeriods, business } of schedules) {
-      for (const period of [...timelinePeriods, ...business.periods]) {
+    for (const { dateRanges } of schedules) {
+      for (const period of dateRanges) {
         values.add(Number(period.start.slice(0, 4)));
         if (period.end) values.add(Number(period.end.slice(0, 4)));
       }
@@ -413,10 +413,9 @@ export default function DevelopmentManager() {
     const last = Math.min(9999, Math.max(currentYear + 5, ...values) + 1);
     return Array.from({ length: last - first + 1 }, (_, index) => first + index);
   }, [schedules, selectedYear, currentYear]);
-  const periodRows = useMemo(() => schedules.map(entry => ({
-    ...entry, bars: entry.timelinePeriods.filter(period => overlaps(period, calendar)),
-  })).filter(entry => entry.bars.length || entry.business.periods.some(period => overlaps(period, calendar)) ||
-    (includeUndated && entry.undated)), [schedules, calendar, includeUndated]);
+  const periodRows = useMemo(() => schedules.filter(entry =>
+    (includeUndated && entry.undated) || entry.dateRanges.some(period => overlaps(period, calendar))
+  ), [schedules, calendar, includeUndated]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return periodRows.filter(({ item, progress }) => {
@@ -993,9 +992,9 @@ export default function DevelopmentManager() {
           </div>
 
           <div className="legend-row">
-            {filtered.some(entry => entry.bars.some(bar => bar.type === "business")) &&
+            {filtered.some(({ businessPeriod }) => businessPeriod && overlaps(businessPeriod, calendar)) &&
               <span><i className="business" />사업기간</span>}
-            {timelineStages.map(stage => <span key={stage.type}><i className={stage.type} />{stage.label}</span>)}
+            {firmwareStages.map(stage => <span key={stage.type}><i className={stage.type} />{stage.label}</span>)}
             <em>총 {filtered.length}건</em>
           </div>
 
@@ -1012,8 +1011,8 @@ export default function DevelopmentManager() {
                   </span>)}
                 </div>
               </div>
-              {filtered.length ? filtered.map(({item, bars, progress}) => (
-                <TimelineRow key={item.id} item={item} progress={progress} periods={bars} calendar={calendar}
+              {filtered.length ? filtered.map(({item, businessPeriod, progress}) => (
+                <TimelineRow key={item.id} item={item} progress={progress} businessPeriod={businessPeriod} calendar={calendar}
                   selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
               )) : (
                 <div className="empty-row">조건에 맞는 개발 건이 없습니다. 필터를 다시 확인해주세요.</div>
