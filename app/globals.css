@@ -132,10 +132,10 @@ button { color: inherit; }
 .status-badge { padding: 4px 5px; border-radius: 4px; background: #edf1f5; color: #6c798a; font-size: 9px; font-weight: 700; text-align: center; white-space: nowrap; }.status-개발진행 { background: #e5f5ec; color: #278457; }.status-품질진행 { background: #fff0dd; color: #bc6d18; }.status-대기중 { background: #e6effd; color: #3369b4; }.status-완료 { background: #e6f5f1; color: #26826c; }
 .row-progress { position: relative; height: 3px; border-radius: 2px; background: #e5e9ef; color: #8390a1; font-size: 8px; text-align: right; line-height: 19px; }.row-progress i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: #4b83dc; }
 .timeline-track { position: absolute; inset: 0 0 0 430px; overflow: hidden; }.day-lines { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(var(--day-count), 1fr); }.day-lines i { border-left: 1px solid #edf0f4; }.day-lines i.weekend { background: rgba(239,242,246,.62); }.today-line { position: absolute; z-index: 3; top: 0; bottom: 0; width: 1px; background: #edbd2d; }
-.phase-bar { position: absolute; z-index: 2; transform: translateY(-50%); height: 18px; padding-inline: 3px; border-radius: 4px; overflow: hidden; white-space: nowrap; text-align: left; color: white; background: color-mix(in srgb, var(--bar) 77%, #142034); font-size: 12px; font-weight: 700; line-height: 18px; }
+.phase-bar { position: absolute; z-index: 2; transform: translateY(-50%); height: 18px; border-radius: 4px; background: color-mix(in srgb, var(--bar) 77%, #142034); }
 .phase-bar.design { --bar: var(--design); }
 .phase-bar.development { --bar: var(--development); }
-.phase-bar.qa { --bar: var(--qa); color: #251600; background: var(--qa); }
+.phase-bar.qa { --bar: var(--qa); background: var(--qa); }
 .phase-bar.deploy { --bar: var(--deploy); }
 .empty-row { height: 150px; margin-top: 43px; display: grid; place-items: center; color: #8793a4; font-size: 12px; }
 
@@ -356,8 +356,8 @@ button { color: inherit; }
 .undated-filter input { accent-color: #3974cf; }
 .dashboard-workspace .legend-row { height: auto; min-height: 37px; flex-wrap: wrap; gap: 5px 13px; padding-block: 6px; }
 .legend-row i.business { background: #8594a8; }
-.phase-bar.business { color: #31465e; background: #dbe3ed; box-shadow: inset 0 0 0 1px #aab8c8; }
-.gantt-year .phase-bar { min-width: 2px; padding-inline: 0; }
+.phase-bar.business { background: #dbe3ed; box-shadow: inset 0 0 0 1px #aab8c8; }
+.gantt-year .phase-bar { min-width: 2px; }
 .dashboard-workspace .gantt-year .day-heads span.today:after { content: "이번 달"; white-space: nowrap; }
 .dashboard-workspace :is(.day-heads,.day-lines) { grid-template-columns: var(--calendar-columns); }
 .dashboard-workspace .task-title small { font-size: var(--meta-font); }

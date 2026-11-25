@@ -7,17 +7,19 @@ function layoutPeriods(periods: TimelinePeriod[], calendar: DashboardCalendar) {
   const visible = periods.filter(period => overlaps(period, calendar)).map(period => ({
     period,
     first: Math.max(0, dayNumber(period.start) - calendar.firstDay),
-    last: Math.min(calendar.numberOfDays - 1, dayNumber(period.end || calendar.end) - calendar.firstDay),
+    last: Math.min(calendar.numberOfDays - 1, dayNumber(period.end) - calendar.firstDay),
   })).sort((a, b) => a.first - b.first || a.last - b.last);
 
-  const laneEnds: number[] = [];
+  const firstStageLane = visible.some(bar => bar.period.type === "business") ? 1 : 0;
+  const stageLaneEnds: number[] = [];
   const bars = visible.map(bar => {
-    const free = laneEnds.findIndex(end => end < bar.first);
-    const lane = free === -1 ? laneEnds.length : free;
-    laneEnds[lane] = bar.last;
-    return { ...bar, lane };
+    if (bar.period.type === "business") return { ...bar, lane: 0 };
+    const free = stageLaneEnds.findIndex(end => end < bar.first);
+    const lane = free === -1 ? stageLaneEnds.length : free;
+    stageLaneEnds[lane] = bar.last;
+    return { ...bar, lane: firstStageLane + lane };
   });
-  return { bars, laneCount: laneEnds.length };
+  return { bars, laneCount: firstStageLane + stageLaneEnds.length };
 }
 
 function ChartRow({ calendar, periods, children, label, selected, onSelect }: {
@@ -31,11 +33,12 @@ function ChartRow({ calendar, periods, children, label, selected, onSelect }: {
     {calendar.todayPosition !== undefined &&
       <span aria-hidden="true" className="today-line" style={{ left: `${calendar.todayPosition * 100}%` }} />}
     {bars.map(({ period, first, last, lane }) => {
-      const dates = period.start === period.end ? period.start : `${period.start} ~ ${period.end || "종료 미정"}`;
+      const dates = period.start === period.end ? period.start : `${period.start} ~ ${period.end}`;
+      const description = `${period.label} · ${dates}`;
       return <span key={period.type + period.start} className={`phase-bar ${period.type}`}
         style={{ left: `${first * 100 / calendar.numberOfDays}%`, width: `${(last - first + 1) * 100 / calendar.numberOfDays}%`,
           top: `calc(50% + ${(lane - (laneCount - 1) / 2) * laneHeight}px)` }}
-        title={`${period.label} · ${dates}`}>{period.label}</span>;
+        role="img" aria-label={description} title={description} />;
     })}
   </>;
   return <div className={`timeline-row ${onSelect ? "project-timeline" : "firmware-timeline"}${selected ? " selected" : ""}`}
