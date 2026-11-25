@@ -212,7 +212,7 @@ export default function DevelopmentManager() {
   const [query, setQuery] = useState("");
   const [categoryFilters, setCategoryFilters] = useState<Development["category"][]>([]);
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
-  const [progressFilters, setProgressFilters] = useState<ProgressState[]>([]);
+  const [progressFilters, setProgressFilters] = useState<ProgressState[]>(["진행중"]);
   const [showForm, setShowForm] = useState(false);
   const [editingDevelopment, setEditingDevelopment] = useState<Development | null>(null);
   const [toast, setToast] = useState("");
